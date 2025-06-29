@@ -1,3 +1,4 @@
-Human: Hello! Can you help me with a question I have?
-
-Assistant: 
+<|im_start|>user
+Hello! Can you help me with a question I have?
+<|im_end|>
+<|im_start|>assistant

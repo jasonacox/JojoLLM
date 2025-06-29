@@ -28,6 +28,28 @@ This directory contains training data used to school Jojo and scripts for prepar
 - `chitchat-train.bin` - Tokenized training data in binary format
 - `chitchat-val.bin` - Tokenized validation data in binary format
 
+## Chat Format
+
+Example:
+
+```
+<|im_start|>system
+You are a helpful assistant designed to answer questions about general knowledge.
+<|im_end|>
+<|im_start|>user
+What is the capital of France?
+<|im_end|>
+<|im_start|>assistant
+Paris.
+<|im_end|>
+<|im_start|>user
+Who wrote "Romeo and Juliet"?
+<|im_end|>
+<|im_start|>assistant
+William Shakespeare.
+<|im_end|>
+```
+
 ## Preparation Scripts
 
 ### prepare-story.py

@@ -1,3 +1,4 @@
-Human: Hi
-
-Assistant: 
+<|im_start|>user
+Hi
+<|im_end|>
+<|im_start|>assistant

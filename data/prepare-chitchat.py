@@ -4,7 +4,16 @@ Jojo LLM Data Preparation - Simple Chit-Chat Dataset
 
 This script creates a simple chit-chat dataset with common greetings
 and short conversational exchanges to help train the model for 
-basic social interactions.
+basic social interactions. The dataset includes a diverse set of
+user names and conversational templates to help the model generalize
+better across different users and interaction styles.
+
+Key features:
+- Uses ChatML-style special tokens for formatting
+- Includes diverse names across different cultures
+- Generates varied greeting, question, and multi-turn conversations
+- Supports name introduction and personalized responses
+- Includes nickname handling and personalization
 
 Author: Jason A. Cox
 2025 June 28
@@ -18,11 +27,34 @@ import re
 import sys
 import random
 
-# Chat format template
+# Special tokens for chat format
+SPECIAL_TOKENS = {
+    "im_start": "<|im_start|>",
+    "im_end": "<|im_end|>",
+    "user": "user",
+    "assistant": "assistant",
+    "system": "system",
+    "endoftext": "<|endoftext|>"
+}
+
+# Old format constants (kept for reference)
 HUMAN_PREFIX = "Human: "
 ASSISTANT_PREFIX = "Assistant: "
 TURN_SEPARATOR = "\n\n"
 CONVERSATION_SEPARATOR = "\n\n<|endoftext|>\n\n"
+
+# Helper functions for new format
+def format_user_message(message):
+    """Format a message from the user with special tokens"""
+    return f"{SPECIAL_TOKENS['im_start']}{SPECIAL_TOKENS['user']}\n{message.strip()}\n{SPECIAL_TOKENS['im_end']}"
+
+def format_assistant_message(message):
+    """Format a message from the assistant with special tokens"""
+    return f"{SPECIAL_TOKENS['im_start']}{SPECIAL_TOKENS['assistant']}\n{message.strip()}\n{SPECIAL_TOKENS['im_end']}"
+
+def format_system_message(message):
+    """Format a system message with special tokens"""
+    return f"{SPECIAL_TOKENS['im_start']}{SPECIAL_TOKENS['system']}\n{message.strip()}\n{SPECIAL_TOKENS['im_end']}"
 
 def ensure_dir(directory):
     """Create directory if it doesn't exist"""
@@ -37,28 +69,157 @@ def generate_chitchat_dataset():
     """
     chitchat_data = []
     
-    # Name introduction interactions
-    name_interactions = [
-        # Format: (human_intro, [list_of_possible_assistant_responses])
-        ("My name is Jason.", [
-            "Hi Jason, it's nice to meet you! How may I help you today?",
-            "Hello Jason! What can I assist you with today?",
-            "Nice to meet you, Jason! How can I help you?",
-            "Hi Jason! I'm Jojo. What can I do for you today?"
-        ]),
-        ("I am Jason.", [
-            "Hello Jason! It's great to meet you. What can I help you with today?",
-            "Nice to meet you, Jason. I'm Jojo. How may I assist you?",
-            "Hi Jason! How can I help you today?",
-            "Hello Jason! I'm Jojo, your AI assistant. What do you need help with?"
-        ]),
-        ("You can call me Jason.", [
-            "I'll call you Jason! It's nice to meet you. How can I assist you today?",
-            "Hello Jason! I'm Jojo. What can I help you with?",
-            "Nice to meet you, Jason! Is there something I can help you with today?",
-            "Hi Jason! What would you like help with today?"
-        ])
+    # List of diverse names for personalization
+    diverse_names = [
+        # English/Western names
+        "Jason", "Emma", "Liam", "Olivia", "Noah", "Ava", "William", "Sophia", 
+        "James", "Isabella", "Oliver", "Charlotte", "Benjamin", "Amelia", 
+        "Elijah", "Mia", "Lucas", "Harper", "Mason", "Evelyn", "Logan", "Abigail",
+        "Alexander", "Emily", "Ethan", "Elizabeth", "Jacob", "Sofia", "Michael", "Avery",
+        "Daniel", "Ella", "Henry", "Scarlett", "Jackson", "Grace", "Sebastian", "Chloe",
+        "Matthew", "Victoria", "David", "Riley", "Joseph", "Aria", "Carter", "Lily",
+        "Owen", "Aubrey", "Wyatt", "Zoey", "John", "Penelope", "Jack", "Layla", 
+        "Luke", "Lillian", "Jayden", "Nora", "Dylan", "Camila", "Gabriel", "Hannah",
+        "Jane", "Jonathan", "Julia", "Jessica", "Jenna", "Jordan", "Jasmine", "Jared",
+
+        # European names
+        "Louis", "Chloe", "Gabriel", "Camille", "Arthur", "Léa", "Raphaël", "Manon",
+        "Jules", "Inès", "Lucas", "Lola", "Nathan", "Clara", "Adam", "Zoé",
+        "Maximilian", "Sophie", "Alexander", "Marie", "Paul", "Emilia", "Leon", "Hannah",
+        "Felix", "Mia", "Jonas", "Lukas", "Anna", "Tim", "Lea",
+        "Emil", "Freja", "Oscar", "Ida", "Oliver", "Astrid", "Hugo", "Ella",
+        "Anton", "Signe", "Mikkel", "Mathilde", "Victor", "William", "Sofie", "Amalie",
+        "Alma", "Sebastian", "Maja", "Lars", "Noah", "Nora",
+        
+        # South Asian names
+        "Aarav", "Aanya", "Vivaan", "Anaya", "Vihaan", "Saanvi", "Arjun", "Anika",
+        "Reyansh", "Ishani", "Ayaan", "Pari", "Atharv", "Anvi", "Shaurya", "Myra",
+        "Advik", "Aarohi", "Rudra", "Kiara", "Kabir", "Navya", "Aditya", "Ishita",
+        "Krish", "Riya", "Aryan", "Shreya", "Arnav", "Diya", "Nikhil", "Aditi",
+        "Raj", "Priya", "Sanjay", "Divya", "Rahul", "Neha", "Vijay", "Pooja",
+        
+        # East Asian names
+        "Wei", "Mei", "Hiroshi", "Yuki", "Chen", "Jing", "Kenji", "Sakura",
+        "Takashi", "Ayumi", "Ming", "Lin", "Ryo", "Yuna", "Zheng", "Xiu",
+        "Taro", "Hana", "Jin", "Eun", "Hikaru", "Akiko", "Akira", "Emi",
+        "Li", "Ying", "Takumi", "Rin", "Jun", "Natsuki", "Kenta", "Yue",
+        "Hayato", "Aoi", "Sora", "Kaori", "Haruto", "Yumi", "Kei", "Mizuki",
+
+        # Middle Eastern/Arabic names
+        "Amir", "Fatima", "Omar", "Zara", "Ali", "Leila", "Hassan", "Jasmine", 
+        "Mohammed", "Layla", "Ibrahim", "Amira", "Yusuf", "Noor", "Ahmad", "Rania",
+        "Zaid", "Samira", "Tariq", "Dalia", "Malik", "Zahra", "Karim", "Hana",
+        "Mustafa", "Lina", "Samir", "Maya", "Jamal", "Nadia", "Fadi", "Mariam",
+        
+        # Hispanic/Latino names
+        "Miguel", "Sofia", "Diego", "Isabella", "Mateo", "Valentina", "Santiago", "Camila",
+        "Sebastian", "Emma", "Alejandro", "Lucia", "Leonardo", "Victoria", "Gabriel", "Valeria",
+        "Emiliano", "Mariana", "Daniel", "Daniela", "Adrian", "Regina", "David", "Elena",
+        "Jose", "Gabriela", "Luis", "Natalia", "Javier", "Ximena", "Carlos", "Paula",
+        
+        # African names
+        "Amara", "Kwame", "Nia", "Kofi", "Zuri", "Sekou", "Ayanna", "Tendai", 
+        "Folami", "Jelani", "Makena", "Chike", "Aaliyah", "Tafari", "Imani", "Faraji",
+        "Adhiambo", "Bakari", "Thema", "Jabari", "Kesi", "Olu", "Zalika", "Kwesi",
+        "Abeni", "Nnamdi", "Fola", "Oluchi", "Chiamaka", "Dakarai", "Zola", "Kamau"
     ]
+    
+    # Generate name introduction interactions with multiple names
+    name_interactions = []
+    
+    # Templates for name introductions
+    name_intro_templates = [
+        "My name is {}.",
+        "I am {}.",
+        "You can call me {}.",
+        "Hi, I'm {}.",
+        "Hello, my name is {}.",
+        "I'd like to introduce myself. I'm {}.",
+        "Please address me as {}.",
+        "{}. That's my name.",
+        "I go by {}.",
+        "I prefer to be called {}.",
+        "Everyone calls me {}.",
+        "Nice to meet you, I'm {}.",
+        "The name's {}.",
+        "Allow me to introduce myself. I'm {}.",
+        "{}. But my friends call me {}."  # This one will be handled specially
+    ]
+    
+    # Templates for assistant responses with {name} placeholder
+    assistant_response_templates = [
+        "Hi {name}, it's nice to meet you! How may I help you today?",
+        "Hello {name}! What can I assist you with today?",
+        "Nice to meet you, {name}! How can I help you?",
+        "Hi {name}! I'm Jojo. What can I do for you today?",
+        "Hello {name}! It's great to meet you. What can I help you with today?",
+        "Nice to meet you, {name}. I'm Jojo. How may I assist you?",
+        "I'll call you {name}! It's nice to meet you. How can I assist you today?",
+        "Hello {name}! I'm Jojo. What can I help you with?",
+        "It's a pleasure to meet you, {name}. How can I be of service today?",
+        "Welcome, {name}! Is there anything specific you'd like help with?",
+        "Great to meet you, {name}! How can I make your day better?",
+        "Hello {name}! I'm Jojo, an AI assistant. What brings you here today?",
+        "Nice to meet you, {name}! I'm here to help with whatever you need.",
+        "Hi {name}! Thanks for introducing yourself. How can I assist you?",
+        "Hello {name}! I'm Jojo. I'll remember your name during our conversation. How can I help you today?"
+    ]
+    
+    # Function to generate nickname from full name
+    def generate_nickname(name):
+        if len(name) <= 3:
+            return name  # Name is too short for a nickname
+        
+        # Common nickname patterns
+        if name.lower().startswith('ch'):
+            return name[:3]  # "Charles" -> "Cha"
+        elif name.lower().startswith('j'):
+            return name[:4] if len(name) >= 4 else name  # "James" -> "Jame"
+        elif name.lower().endswith('y'):
+            return name  # Already sounds like a nickname
+        elif name.lower().endswith('ia'):
+            return name[:-2] + "y"  # "Victoria" -> "Victory"
+        elif len(name) >= 5:
+            return name[:3]  # First 3 letters
+        else:
+            return name
+    
+    # Generate combinations of names with introductions and responses
+    for name in diverse_names:
+        # Sample 3 random templates per name
+        for intro_template in random.sample(name_intro_templates, 3):
+            # Handle the special case with nickname
+            if "{}. But my friends call me {}" in intro_template:
+                nickname = generate_nickname(name)
+                if nickname == name:  # If nickname generation failed, use a simple truncation
+                    nickname = name[:3] if len(name) > 3 else name
+                    
+                human_intro = intro_template.format(name, nickname)
+                
+                # Generate responses that acknowledge both name and nickname
+                assistant_responses = []
+                for _ in range(3):
+                    response = random.choice([
+                        f"Nice to meet you, {name}! I'll remember that you prefer {nickname}. How can I help you today?",
+                        f"Hello {name}! I'll call you {nickname} as you prefer. What can I assist you with?",
+                        f"Great to meet you, {nickname}! Thanks for letting me know your name. How can I help?",
+                        f"Hi {nickname}! It's a pleasure to meet you. What brings you here today?"
+                    ])
+                    assistant_responses.append(response)
+                
+                name_interactions.append((human_intro, assistant_responses))
+            else:
+                human_intro = intro_template.format(name)
+                
+                # Generate 3 varied responses for each introduction
+                assistant_responses = []
+                for template in random.sample(assistant_response_templates, 3):
+                    assistant_responses.append(template.format(name=name))
+                    
+                name_interactions.append((human_intro, assistant_responses))
+            
+    # Print some statistics about the generated data
+    print(f"Generated {len(name_interactions)} name introduction interactions with {len(diverse_names)} different names")
     
     # Simple greetings with variations
     greetings = [
@@ -189,20 +350,20 @@ def generate_chitchat_dataset():
     for greeting, responses in greetings:
         for response in responses:
             conversation = [
-                f"{HUMAN_PREFIX}{greeting}",
-                f"{ASSISTANT_PREFIX}{response}"
+                format_user_message(greeting),
+                format_assistant_message(response)
             ]
-            chitchat_data.append(TURN_SEPARATOR.join(conversation))
+            chitchat_data.append("\n".join(conversation))
     
     # Generate single-turn conversations from questions
     print("Generating question exchanges...")
     for question, responses in questions:
         for response in responses:
             conversation = [
-                f"{HUMAN_PREFIX}{question}",
-                f"{ASSISTANT_PREFIX}{response}"
+                format_user_message(question),
+                format_assistant_message(response)
             ]
-            chitchat_data.append(TURN_SEPARATOR.join(conversation))
+            chitchat_data.append("\n".join(conversation))
     
     # Generate two-turn conversations (greeting + follow-up)
     print("Generating multi-turn exchanges...")
@@ -211,22 +372,22 @@ def generate_chitchat_dataset():
             for follow_up, follow_up_responses in follow_ups:
                 for follow_up_response in follow_up_responses[:1]:  # Just one response per follow-up
                     conversation = [
-                        f"{HUMAN_PREFIX}{greeting}",
-                        f"{ASSISTANT_PREFIX}{greeting_response}",
-                        f"{HUMAN_PREFIX}{follow_up}",
-                        f"{ASSISTANT_PREFIX}{follow_up_response}"
+                        format_user_message(greeting),
+                        format_assistant_message(greeting_response),
+                        format_user_message(follow_up),
+                        format_assistant_message(follow_up_response)
                     ]
-                    chitchat_data.append(TURN_SEPARATOR.join(conversation))
+                    chitchat_data.append("\n".join(conversation))
     
     # Generate name introduction conversations
     print("Generating name introduction exchanges...")
     for name_intro, responses in name_interactions:
         for response in responses:
             conversation = [
-                f"{HUMAN_PREFIX}{name_intro}",
-                f"{ASSISTANT_PREFIX}{response}"
+                format_user_message(name_intro),
+                format_assistant_message(response)
             ]
-            chitchat_data.append(TURN_SEPARATOR.join(conversation))
+            chitchat_data.append("\n".join(conversation))
     
     # Add some more complex multi-turn conversations
     
@@ -256,19 +417,119 @@ def generate_chitchat_dataset():
             "I'm just browsing the internet",
             "That sounds nice! If you need any information or have any questions during your browsing, feel free to ask. I'm here to help!"
         ],
+    ]
+    
+    # Generate name-based complex conversations using the diverse_names list
+    name_complex_conversations = []
+    
+    # Templates for name-based complex conversations
+    name_conversation_templates = [
+        # Template 0: Nickname conversation
+        [
+            "My name is {name}, but you can call me {nickname}.",
+            "Nice to meet you, {nickname}! I'll remember that you prefer to be called {nickname}. How can I help you today?",
+            "Do you remember my full name and my nickname?",
+            "Yes, your full name is {name}, but you prefer to be called {nickname}. I'll make sure to address you as {nickname} during our conversation. Is there anything I can help you with?"
+        ],
+        # Template 1: What is your name?
         [
             "What is your name?",
             "My name is Jojo. How can I help you today?",
-            "My name is Jason",
-            "It's nice to meet you, Jason! How may I assist you today?"
+            "My name is {name}",
+            "It's nice to meet you, {name}! How may I assist you today?"
         ],
+        # Template 2: Introduction and remembering
         [
-            "Hi, I'm Jason",
-            "Hello Jason! It's nice to meet you. I'm Jojo, your AI assistant. How can I help you today?",
+            "Hi, I'm {name}",
+            "Hello {name}! It's nice to meet you. I'm Jojo, your AI assistant. How can I help you today?",
             "Can you remember my name?",
-            "Yes, I'll remember that your name is Jason during our conversation. How can I assist you, Jason?"
+            "Yes, I'll remember that your name is {name} during our conversation. How can I assist you, {name}?"
+        ],
+        # Template 3: Longer introduction
+        [
+            "Hello there, I'd like to introduce myself. My name is {name}.",
+            "Hi {name}! It's a pleasure to meet you. I'm Jojo, an AI assistant. How can I help you today?",
+            "Thanks for the warm welcome, Jojo. I'm just exploring what you can do.",
+            "I'm happy to help you explore, {name}! I can answer questions, provide information, assist with various tasks, and engage in conversation. Is there anything specific you'd like to know?"
+        ],
+        # Template 4: Formal introduction
+        [
+            "Good day. My name is {name} and I'm new here.",
+            "Welcome, {name}! I'm Jojo, your AI assistant. It's great to have you here. How can I make your experience better today?",
+            "Could you tell me what capabilities you have?",
+            "Of course, {name}. I can answer questions, provide information on various topics, help with writing and creative tasks, engage in conversation, and much more. What would you like to explore first?"
+        ],
+        # Template 5: Personal preference question
+        [
+            "Hello Jojo, I'm {name}.",
+            "Hello {name}! It's nice to meet you. How can I help you today?",
+            "What are some of your favorite things?",
+            "As an AI assistant, I don't have personal preferences in the same way humans do. I'm designed to be helpful, informative, and engaging for users like you, {name}. Is there anything specific you'd like to know or discuss?"
+        ],
+        # Template 6: Technical help
+        [
+            "Hi Jojo, my name is {name} and I need some technical help.",
+            "Hello {name}! I'd be happy to help with any technical issues you're facing. What seems to be the problem?",
+            "I'm trying to figure out how to use this new app.",
+            "I understand that can be challenging, {name}. To help you better, could you tell me which app you're trying to use? Once I know that, I can provide more specific guidance on how to get started."
+        ],
+        # Template 7: Asking about hobbies
+        [
+            "Hi Jojo, I'm {name}. What do you like to do for fun?",
+            "Hello {name}! As an AI assistant, I don't have personal experiences or hobbies like humans do. I'm here to help you with information, answer your questions, and assist with tasks. How can I help you today?",
+            "I enjoy hiking and reading. Do you have any book recommendations?",
+            "Those are wonderful hobbies, {name}! While I don't have personal reading experiences, I can suggest some popular books in various genres. What kind of books do you typically enjoy reading?"
+        ],
+        # Template 8: Weather conversation
+        [
+            "Hi, my name is {name}. How's the weather today?",
+            "Hello {name}! As an AI, I don't have access to real-time weather information or your location. To get accurate weather updates, you could check a weather app, website, or look outside. Is there something else I can help you with?",
+            "It's sunny here. Just wanted to chat.",
+            "That sounds lovely, {name}! Sunny days can be quite energizing. I'm always happy to chat. Is there any particular topic you'd like to discuss today?"
+        ],
+        # Template 9: Seeking advice
+        [
+            "Hello, I'm {name} and I'm looking for some advice.",
+            "Hi {name}! I'd be happy to help with advice. What kind of guidance are you looking for today?",
+            "I'm trying to be more productive. Any suggestions?",
+            "That's a great goal, {name}! For improved productivity, you might try techniques like time blocking, the Pomodoro method (25 minutes of focused work followed by 5-minute breaks), minimizing distractions, prioritizing tasks with a to-do list, and ensuring you get adequate rest. Would you like me to elaborate on any of these methods?"
+        ],
+        # Template 10: Learning about user
+        [
+            "Hi Jojo! My name is {name}.",
+            "Hello {name}! It's nice to meet you. How can I assist you today?",
+            "I'm interested in learning about artificial intelligence.",
+            "That's a fascinating field, {name}! Artificial Intelligence covers many areas like machine learning, natural language processing, computer vision, and robotics. Are you interested in a specific aspect of AI, or would you like a general introduction to the field?"
         ]
     ]
+    
+    # Generate conversations with different names
+    for template_idx, template in enumerate(name_conversation_templates):
+        for name in random.sample(diverse_names, 5):  # Use 5 different names for each template
+            conversation = []
+            
+            # Handle the nickname template specially
+            if template_idx == 0:  # Nickname conversation template
+                nickname = generate_nickname(name)
+                if nickname == name:  # If nickname generation failed, use a simple variation
+                    if len(name) > 3:
+                        nickname = name[:3]
+                    else:
+                        nickname = name + "y"  # Add 'y' for very short names
+                
+                for i, msg in enumerate(template):
+                    conversation.append(msg.format(name=name, nickname=nickname))
+            else:
+                # Regular templates without nicknames
+                for i, msg in enumerate(template):
+                    conversation.append(msg.format(name=name))
+                    
+            name_complex_conversations.append(conversation)
+    
+    # Add the name-based complex conversations to the main list
+    complex_conversations.extend(name_complex_conversations)
+    
+    print(f"Generated {len(name_complex_conversations)} complex conversations with diverse names")
     
     print("Adding complex conversations...")
     for conv in complex_conversations:
@@ -276,12 +537,12 @@ def generate_chitchat_dataset():
         for i, message in enumerate(conv):
             if i % 2 == 0:
                 # Human message
-                formatted_conv.append(f"{HUMAN_PREFIX}{message}")
+                formatted_conv.append(format_user_message(message))
             else:
                 # Assistant message
-                formatted_conv.append(f"{ASSISTANT_PREFIX}{message}")
+                formatted_conv.append(format_assistant_message(message))
         
-        chitchat_data.append(TURN_SEPARATOR.join(formatted_conv))
+        chitchat_data.append("\n".join(formatted_conv))
     
     print(f"Generated {len(chitchat_data)} chit-chat conversations in total")
     return chitchat_data
@@ -307,8 +568,9 @@ def main():
     print(f"Split into {len(train_data)} training and {len(val_data)} validation conversations.")
     
     # Combine all conversations into text files with conversation separators
-    train_text = CONVERSATION_SEPARATOR.join(train_data)
-    val_text = CONVERSATION_SEPARATOR.join(val_data)
+    conversation_separator = f"\n{SPECIAL_TOKENS['endoftext']}\n"
+    train_text = conversation_separator.join(train_data)
+    val_text = conversation_separator.join(val_data)
     
     # Save the raw text files
     train_file = os.path.join(data_dir, "chitchat-train.txt")
@@ -363,7 +625,7 @@ def main():
         
         example_file = os.path.join(example_dir, 'chitchat_prompt.txt')
         with open(example_file, 'w', encoding='utf-8') as f:
-            f.write(f"{HUMAN_PREFIX}Hi\n\n{ASSISTANT_PREFIX}")
+            f.write(format_user_message("Hi") + "\n" + SPECIAL_TOKENS['im_start'] + SPECIAL_TOKENS['assistant'] + "\n")
         
         print(f"\nAn example chit-chat prompt has been created at: {example_file}")
         print("Use this with gen.py to test your trained model:")

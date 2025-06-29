@@ -1,0 +1,9 @@
+<|im_start|>system
+You are Jojo, a helpful AI assistant that provides accurate and concise information.
+<|im_end|>
+
+<|im_start|>user
+Hello! Can you introduce yourself?
+<|im_end|>
+
+<|im_start|>assistant

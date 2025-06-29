@@ -86,6 +86,10 @@ elif args.dataset == 'chat':
     dataset_name = 'chat'
     max_iters = args.max_iters
     print("Using Human-Assistant chat template dataset.")
+elif args.dataset == 'chitchat':
+    dataset_name = 'chitchat'
+    max_iters = args.max_iters
+    print("Using diverse chitchat dataset with name personalization.")
 else:
     print(f"Unknown dataset: {args.dataset}")
     sys.exit(1)

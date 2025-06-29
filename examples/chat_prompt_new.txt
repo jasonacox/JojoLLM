@@ -1,5 +1,5 @@
 <|im_start|>user
-Hello! How are you doing today?
+Hello! Can you help me with a question I have?
 <|im_end|>
 
 <|im_start|>assistant

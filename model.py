@@ -119,6 +119,9 @@ class Block(nn.Module):
 class GPTConfig:
     block_size: int = 1024
     vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
+    # Extended vocab: GPT-2 base (50257) + custom special tokens (<|im_start|>, <|im_end|>)
+    # Note: <|endoftext|> (50256) is already in the base vocabulary
+    extended_vocab_size: int = 50259
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768

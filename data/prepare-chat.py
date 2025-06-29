@@ -38,11 +38,34 @@ from urllib.parse import urlparse
 # Constants
 DAILYDIALOG_URL = "http://yanran.li/files/ijcnlp_dailydialog.zip"
 
-# Chat format template
+# Special tokens for chat format
+SPECIAL_TOKENS = {
+    "im_start": "<|im_start|>",
+    "im_end": "<|im_end|>",
+    "user": "user",
+    "assistant": "assistant",
+    "system": "system",
+    "endoftext": "<|endoftext|>"
+}
+
+# Old format constants (kept for reference)
 HUMAN_PREFIX = "Human: "
 ASSISTANT_PREFIX = "Assistant: "
 TURN_SEPARATOR = "\n\n"
 CONVERSATION_SEPARATOR = "\n\n<|endoftext|>\n\n"
+
+# Helper functions for new format
+def format_user_message(message):
+    """Format a message from the user with special tokens"""
+    return f"{SPECIAL_TOKENS['im_start']}{SPECIAL_TOKENS['user']}\n{message.strip()}\n{SPECIAL_TOKENS['im_end']}"
+
+def format_assistant_message(message):
+    """Format a message from the assistant with special tokens"""
+    return f"{SPECIAL_TOKENS['im_start']}{SPECIAL_TOKENS['assistant']}\n{message.strip()}\n{SPECIAL_TOKENS['im_end']}"
+
+def format_system_message(message):
+    """Format a system message with special tokens"""
+    return f"{SPECIAL_TOKENS['im_start']}{SPECIAL_TOKENS['system']}\n{message.strip()}\n{SPECIAL_TOKENS['im_end']}"
 
 def ensure_dir(directory):
     """Create directory if it doesn't exist"""
@@ -86,7 +109,7 @@ def process_dailydialog(dialogue_path):
     return dialogues
 
 def format_chat_template(dialogues):
-    """Format dialogues using the Human-Assistant chat template"""
+    """Format dialogues using the new special token chat template"""
     formatted_data = []
     
     for dialogue in tqdm(dialogues, desc="Formatting dialogues", ncols=80):
@@ -103,16 +126,16 @@ def format_chat_template(dialogues):
                 
                 # Ensure first turn is always Human
                 if i % 2 == 0:
-                    # Human turn
-                    conversation.append(f"{HUMAN_PREFIX}{turn}")
+                    # Human/user turn with new format
+                    conversation.append(format_user_message(turn))
                 else:
-                    # Assistant turn
+                    # Assistant turn with new format
                     # Make sure assistant responses sound helpful and polite
                     turn = refine_assistant_response(turn)
-                    conversation.append(f"{ASSISTANT_PREFIX}{turn}")
+                    conversation.append(format_assistant_message(turn))
             
-            # Join turns with separator
-            formatted_conversation = TURN_SEPARATOR.join(conversation)
+            # Join turns with newline separator
+            formatted_conversation = "\n".join(conversation)
             formatted_data.append(formatted_conversation)
     
     return formatted_data
@@ -288,7 +311,9 @@ def main():
                 
                 example_file = os.path.join(example_dir, 'chat_prompt.txt')
                 with open(example_file, 'w', encoding='utf-8') as f:
-                    f.write(f"{HUMAN_PREFIX}Hello! Can you help me with a question I have?\n\n{ASSISTANT_PREFIX}")
+                    user_message = format_user_message("Hello! Can you help me with a question I have?")
+                    assistant_start = f"{SPECIAL_TOKENS['im_start']}{SPECIAL_TOKENS['assistant']}\n"
+                    f.write(f"{user_message}\n{assistant_start}")
                 
                 print(f"\nAn example chat prompt has been created at: {example_file}")
                 print("Use this with gen.py to test your trained model:")

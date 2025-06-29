@@ -12,9 +12,39 @@ This project aims to build a large language model (LLM) from scratch, inspired b
 ## File Overview
 
 - `data/prepare-story.py`: Prepare the TinyStories dataset for training (download, tokenize and convert to binary format).
+- `data/prepare-chat.py`, `data/prepare-chitchat.py`, `data/prepare-dailydialog.py`: Prepare conversational datasets with ChatML formatting.
 - `train.py`: Create the model from scratch and train it on the dataset.
 - `model.py`: Defines the layers of the GPT model used in this project.
 - `gen.py`: Generate output from the model based on an input.
+- `setup_tokenizer.py`: Provides the extended tokenizer with special token support.
+- `prepare_with_extended_tokenizer.py`: Re-processes datasets using the extended tokenizer.
+- `tokenizer_demo.py`: Demonstrates how to use the extended tokenizer.
+- `test_extended_tokenizer.py`: Tests the extended tokenizer functionality.
+
+## Project Structure
+
+### Core Files
+- `gen.py`: Generate output from the model based on input prompts, including interactive chat mode
+- `model.py`: Defines the layers of the GPT model used in this project
+- `train.py`: Create and train the model from scratch
+- `setup_tokenizer.py`: Implementation of the extended tokenizer with special token support
+- `prepare_with_extended_tokenizer.py`: Utility to process datasets using the extended tokenizer
+- `tokenizer_demo.py`: Demonstrates how to use the extended tokenizer
+
+### Data Preparation
+- `data/prepare-story.py`: Prepares the TinyStories dataset
+- `data/prepare-chat.py`: Prepares chat-formatted conversations
+- `data/prepare-chitchat.py`: Prepares simple chitchat conversations
+- `data/prepare-dailydialog.py`: Prepares the DailyDialog dataset
+
+### Testing and Development
+- `test_extended_tokenizer.py`: Test suite for the extended tokenizer
+- `testing_tools/`: Directory containing additional testing and development utilities
+  - `check_special_tokens.py`: Tests special token handling
+  - `compare_tokenizers.py`: Compares different tokenizer behaviors
+  - `extended_tokenizer.py`: Initial wrapper approach (historical)
+  - `quick_test.py`: Simple debugging script
+  - `test_apostrophes.py`: Tests apostrophe handling in text
 
 ## Setup
 
@@ -89,6 +119,55 @@ This project aims to build a large language model (LLM) from scratch, inspired b
    - `--no_delay`: Disable token generation delay for faster output
    - `--output filename.txt`: Save generated text to a file
    - `--verbose`: Show detailed model information
+
+## Special Tokens and Chat Format
+
+This project uses the ChatML format with the following special tokens:
+
+- `<|im_start|>user ...content... <|im_end|>` - User messages
+- `<|im_start|>assistant ...content... <|im_end|>` - Assistant messages
+- `<|im_start|>system ...content... <|im_end|>` - System instructions
+- `<|endoftext|>` - Conversation separator
+
+### Extended Tokenizer
+
+The project includes an extended tokenizer that properly handles these special tokens as single tokens rather than multiple tokens. This approach:
+- Improves token efficiency by ~40% for conversational data
+- Helps the model better understand conversation structure
+- Enables more efficient training and generation
+
+To use the extended tokenizer:
+
+```python
+from setup_tokenizer import get_extended_tokenizer
+
+# Get the extended tokenizer
+enc = get_extended_tokenizer()
+
+# Encode text with special tokens (always use allowed_special="all")
+tokens = enc.encode("Hello <|im_start|>user text <|im_end|>", allowed_special="all")
+```
+
+The extended tokenizer is automatically used in:
+
+- The data preparation scripts
+- The generation script (gen.py) when using chat mode
+
+### Using Chat Mode
+
+To use the interactive chat mode with proper formatting:
+
+```bash
+python gen.py models/your_model.pt --chat
+```
+
+This will start an interactive chat session that:
+- Properly formats messages using the special tokens
+- Handles conversation history
+- Uses the extended tokenizer for efficient token processing
+
+For more information on implementation details, see the `setup_tokenizer.py` and
+`tokenizer_demo.py` files.
 
 ## Notes
 

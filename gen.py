@@ -20,6 +20,9 @@ import argparse
 import signal
 import readline  # For better command line editing in interactive mode
 
+# Import extended tokenizer support
+from setup_tokenizer import get_extended_tokenizer, format_user_message, format_system_message, format_assistant_message
+
 # ANSI color codes
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -41,6 +44,10 @@ def parse_args():
                        help='Load prompt from file')
     parser.add_argument('--interactive', action='store_true',
                        help='Enter interactive mode for continued prompts')
+    parser.add_argument('--chat', action='store_true',
+                       help='Enter interactive chat mode with ChatML formatting')
+    parser.add_argument('--use_base_tokenizer', action='store_true',
+                       help='Use base GPT-2 tokenizer instead of extended tokenizer (not recommended for chat)')
     parser.add_argument('--seed', type=int, default=1334, 
                        help='Random seed (default: 1334)')
     parser.add_argument('--temp', type=float, default=1.0, 
@@ -195,15 +202,28 @@ def load_prompt(args):
     
     return args.prompt
 
-def process_prompt(prompt, device):
+def process_prompt(prompt, device, use_extended=True):
     """Process the input prompt."""
-    enc = tiktoken.get_encoding("gpt2")
+    # Use the extended tokenizer if requested and available
+    if use_extended:
+        try:
+            enc = get_extended_tokenizer()
+            print(f"{BLUE}Using extended tokenizer with special tokens{ENDC}")
+        except Exception as e:
+            print(f"{YELLOW}Warning: Could not initialize extended tokenizer: {str(e)}{ENDC}")
+            print(f"{YELLOW}Falling back to standard GPT-2 tokenizer{ENDC}")
+            enc = tiktoken.get_encoding("gpt2")
+    else:
+        enc = tiktoken.get_encoding("gpt2")
+    
     print(f"{BLUE}Prompt:{ENDC} {repr(prompt)}")
     try:
-        start_ids = enc.encode(prompt, allowed_special={"<|endoftext|>"})
+        # Always use allowed_special="all" to handle special tokens
+        start_ids = enc.encode(prompt, allowed_special="all")
+            
         if len(start_ids) == 0:
             print(f"{YELLOW}Warning: Empty prompt after encoding. Adding a newline character.{ENDC}")
-            start_ids = enc.encode("\n", allowed_special={"<|endoftext|>"})
+            start_ids = enc.encode("\n", allowed_special="all")
             
         x = torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...]
         return x, start_ids, enc
@@ -366,6 +386,104 @@ def interactive_mode(model, enc, args, ctx, device):
         except Exception as e:
             print(f"{RED}Error in interactive mode:{ENDC} {str(e)}")
 
+def format_chat_prompt(system_message, conversation=None):
+    """
+    Format a prompt using the ChatML format with special tokens.
+    
+    Args:
+        system_message: A system message to set the personality/instructions for the AI
+        conversation: List of dictionaries with 'role' and 'content' keys
+                     (role is one of 'user' or 'assistant')
+    
+    Returns:
+        A formatted chat prompt ready for tokenization
+    """
+    if conversation is None:
+        conversation = []
+    
+    # Format system message if provided
+    result = []
+    if system_message:
+        result.append(format_system_message(system_message))
+    
+    # Add conversation messages
+    for message in conversation:
+        if message['role'] == 'user':
+            result.append(format_user_message(message['content']))
+        elif message['role'] == 'assistant':
+            result.append(format_assistant_message(message['content']))
+    
+    # Join all parts with newlines
+    return "\n".join(result)
+
+def interactive_chat_mode(model, enc, args, ctx, device):
+    """Run interactive chat mode with proper formatting."""
+    print(f"\n{BLUE}========================================"
+          f"\n   Interactive Chat Mode (Ctrl+C to exit)"
+          f"\n========================================{ENDC}\n")
+    
+    # Initialize conversation
+    try:
+        # Ask for system message
+        print(f"{BLUE}Enter a system message to set the assistant's behavior:{ENDC}")
+        system_message = input(f"{GREEN}System: {ENDC}")
+        if not system_message.strip():
+            system_message = "You are a helpful AI assistant."
+            print(f"{YELLOW}Using default system message: '{system_message}'{ENDC}")
+        
+        conversation = []
+        
+        while True:
+            # Get user input
+            user_input = input(f"{GREEN}User: {ENDC}")
+            if not user_input.strip() and len(conversation) == 0:
+                user_input = "Hello! How are you today?"
+                print(f"{YELLOW}Using default greeting: '{user_input}'{ENDC}")
+            elif not user_input.strip():
+                continue
+                
+            # Add user message to conversation
+            conversation.append({'role': 'user', 'content': user_input})
+            
+            # Format the complete prompt
+            prompt = format_chat_prompt(system_message, conversation)
+            
+            # Add the assistant start tag to prompt response generation
+            prompt += f"\n{SPECIAL_TOKENS['im_start']}{SPECIAL_TOKENS['assistant']}\n"
+            
+            # Process prompt and generate text
+            x, start_ids, _ = process_prompt(prompt, device)
+            
+            print(f"{BLUE}Assistant: {ENDC}", end='', flush=True)
+            output_text = generate_text(model, x, start_ids, enc, args, ctx)
+            
+            # Clean up the response (remove any incomplete special tokens)
+            if output_text.endswith("<|"):
+                output_text = output_text[:-2].rstrip()
+            elif output_text.endswith("<|im"):
+                output_text = output_text[:-4].rstrip()
+            elif output_text.endswith("<|im_"):
+                output_text = output_text[:-5].rstrip()
+            
+            # Extract just the assistant's response
+            if f"{SPECIAL_TOKENS['im_end']}" in output_text:
+                output_text = output_text.split(f"{SPECIAL_TOKENS['im_end']}")[0].strip()
+            
+            # Add assistant response to conversation history
+            conversation.append({'role': 'assistant', 'content': output_text})
+            
+            # Save output if requested
+            if args.output:
+                timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                filename = f"{os.path.splitext(args.output)[0]}_{timestamp}{os.path.splitext(args.output)[1]}"
+                chat_log = format_chat_prompt(system_message, conversation)
+                save_output(chat_log, filename)
+                
+    except KeyboardInterrupt:
+        print(f"\n{YELLOW}Exiting interactive chat mode.{ENDC}")
+    except Exception as e:
+        print(f"{RED}Error in interactive chat mode:{ENDC} {str(e)}")
+
 def main():
     """Main function to run the generator."""
     print(f"\n{BOLD}{BLUE}========================================\n"
@@ -381,15 +499,24 @@ def main():
     # Setup the model
     model, ctx, device = setup_model(args.checkpoint, device, args.seed, args.dtype, args.verbose)
     
-    # Load and process the prompt
-    prompt = load_prompt(args)
-    x, start_ids, enc = process_prompt(prompt, device)
+    # Determine if we should use the extended tokenizer
+    use_extended = not args.use_base_tokenizer
     
-    if args.interactive:
-        # Run interactive mode
+    if args.chat:
+        # Run interactive chat mode with special token formatting
+        # This initializes its own tokenizer internally
+        interactive_chat_mode(model, None, args, ctx, device)
+    elif args.interactive:
+        # Load a base prompt
+        prompt = load_prompt(args)
+        # Get tokenizer
+        x, start_ids, enc = process_prompt(prompt, device, use_extended=use_extended)
+        # Run standard interactive mode
         interactive_mode(model, enc, args, ctx, device)
     else:
-        # Generate text
+        # Standard generation mode
+        prompt = load_prompt(args)
+        x, start_ids, enc = process_prompt(prompt, device, use_extended=use_extended)
         output_text = generate_text(model, x, start_ids, enc, args, ctx)
         
         # Save output if requested
