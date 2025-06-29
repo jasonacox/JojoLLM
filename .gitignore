@@ -79,3 +79,17 @@ data/TinyStoriesV2-GPT4-train.txt
 data/TinyStoriesV2-GPT4-valid.txt
 data/story-val.bin
 data/story-train.bin
+data/chitchat-train.bin
+data/chat-val.txt
+data/chitchat-train.txt
+data/chitchat-val.bin
+data/chitchat-val.txt
+data/chat-train.bin
+data/dailydialog-train.txt
+*.bin
+*-train.txt
+*-val.txt
+*.zip
+dailydialog/
+models/
+

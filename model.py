@@ -378,3 +378,61 @@ class GPT(nn.Module):
                     else:
                         print(text, end='', flush=True)
 
+    @torch.no_grad()
+    def generate_stream(self, idx, temperature=1.0, top_k=None, max_tokens=None):
+        """
+        Stream generator that yields each token as it's produced.
+        This function continues indefinitely until stopped externally
+        or until max_tokens is reached (if specified).
+        
+        Args:
+            idx: Starting token sequence (as tensor)
+            temperature: Sampling temperature (default 1.0)
+            top_k: Limit to top k options (default None)
+            max_tokens: Optional maximum tokens to generate (default None for infinite)
+            
+        Yields:
+            Tuple containing:
+            - idx: The full sequence so far (including the new token)
+            - token: The newly generated token id (integer)
+        """
+        tokens_generated = 0
+        
+        try:
+            while True:
+                # Stop if max_tokens reached
+                if max_tokens is not None and tokens_generated >= max_tokens:
+                    break
+                    
+                # Crop sequence if needed to prevent exceeding context window
+                idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+                
+                # Get predictions
+                logits, _ = self(idx_cond)
+                logits = logits[:, -1, :] / temperature
+                
+                # Apply top-k filtering
+                if top_k is not None:
+                    v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                    logits[logits < v[:, [-1]]] = -float('Inf')
+                
+                # Sample next token
+                probs = F.softmax(logits, dim=-1)
+                idx_next = torch.multinomial(probs, num_samples=1)
+                
+                # Append to sequence
+                idx = torch.cat((idx, idx_next), dim=1)
+                
+                # Get the new token ID
+                new_token = idx_next[0, 0].item()
+                tokens_generated += 1
+                
+                # Yield results
+                yield idx, new_token
+                
+        except Exception as e:
+            # Log the error but don't halt execution
+            print(f"Warning: Error in generate_stream: {str(e)}")
+            # We still want to yield the exception so the caller can handle it
+            raise
+

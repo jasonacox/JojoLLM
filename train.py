@@ -1,16 +1,14 @@
-max_iters = 5000 # total number of training iterations
-checkpoint_file = f'models/story{max_iters}.pt'
-
 import os
 import time
 import math
 import random
 from contextlib import nullcontext
 import logging
+import argparse
+import sys
 
 import numpy as np
 import torch
-import numpy as np
 from model import GPTConfig, GPT
 
 # Set up logging
@@ -60,13 +58,52 @@ dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16'
 
 ###############################################################################
 
+# Parse command line arguments
+def parse_args():
+    parser = argparse.ArgumentParser(description='Train a GPT model on various datasets')
+    parser.add_argument('--dataset', type=str, default='story', choices=['story', 'dailydialog', 'chat', 'chitchat'],
+                        help='Dataset to use for training (default: story)')
+    parser.add_argument('--max_iters', type=int, default=5000, 
+                        help='Total number of training iterations (default: 5000)')
+    parser.add_argument('--seed', type=int, default=1337,
+                        help='Random seed for reproducibility (default: 1337)')
+    parser.add_argument('--eval_interval', type=int, default=500,
+                        help='How often to run evaluation (default: 500)')
+    parser.add_argument('--log_interval', type=int, default=10,
+                        help='How often to log training progress (default: 10)')
+    return parser.parse_args()
+
+args = parse_args()
+
+# Set dataset-specific parameters
+if args.dataset == 'story':
+    dataset_name = 'story'
+    max_iters = args.max_iters
+elif args.dataset == 'dailydialog':
+    dataset_name = 'dailydialog'
+    max_iters = args.max_iters
+elif args.dataset == 'chat':
+    dataset_name = 'chat'
+    max_iters = args.max_iters
+    print("Using Human-Assistant chat template dataset.")
+else:
+    print(f"Unknown dataset: {args.dataset}")
+    sys.exit(1)
+
+# Set checkpoint file based on dataset and iterations
+checkpoint_file = f'models/{dataset_name}{max_iters}.pt'
+
 # capture above settings & parameters to save in model checkpoint
-config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
+config_keys = [k for k,v in globals().items() 
+               if not k.startswith('_') and isinstance(v, (int, float, bool, str))
+               and not k in ('args', 'parser')]
 config = {k: globals()[k] for k in config_keys} 
 
 # tokens per iterations
 tokens_per_iter = gradient_accumulation_steps * batch_size * block_size
-print(f"tokens per iteration will be: {tokens_per_iter:,}")
+print(f"Dataset: {dataset_name}")
+print(f"Max iterations: {max_iters}")
+print(f"Tokens per iteration will be: {tokens_per_iter:,}")
 
 # set the random seed
 seed = 1337
@@ -106,9 +143,15 @@ ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torc
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
 # Load the data
-data_dir = dataset + '/'
-train_data = np.memmap(os.path.join(data_dir, 'story-train.bin'), dtype=np.uint16, mode='r')
-val_data = np.memmap(os.path.join(data_dir, 'story-val.bin'), dtype=np.uint16, mode='r')
+data_dir = 'data/'
+try:
+    train_data = np.memmap(os.path.join(data_dir, f'{dataset_name}-train.bin'), dtype=np.uint16, mode='r')
+    val_data = np.memmap(os.path.join(data_dir, f'{dataset_name}-val.bin'), dtype=np.uint16, mode='r')
+    print(f"Loaded {dataset_name} dataset: {len(train_data):,} training tokens, {len(val_data):,} validation tokens")
+except FileNotFoundError:
+    print(f"Error: Could not find {dataset_name} dataset files.")
+    print(f"Make sure to run data/prepare-{dataset_name}.py first.")
+    sys.exit(1)
 
 # get a batch from the data
 def get_batch(split):
