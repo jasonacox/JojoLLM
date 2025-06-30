@@ -23,14 +23,14 @@ import torch
 from model import GPTConfig, GPT
 
 # ANSI color codes for better output
-GREEN = "\033[92m"
-YELLOW = "\033[93m"
-BLUE = "\033[94m"
-RED = "\033[91m"
-MAGENTA = "\033[95m"
-CYAN = "\033[96m"
-ENDC = "\033[0m"
-BOLD = "\033[1m"
+RED = '\033[91m'
+GREEN = '\033[92m'
+YELLOW = '\033[93m'
+BLUE = '\033[94m'
+MAGENTA = '\033[95m'
+CYAN = '\033[96m'
+BOLD = '\033[1m'
+ENDC = '\033[0m'
 UNDERLINE = "\033[4m"
 
 # Define command line arguments
@@ -40,6 +40,8 @@ def parse_args():
                         help='Dataset to use for training (default: story)')
     parser.add_argument('--max_iters', type=int, default=100, 
                         help='Total number of training iterations (default: 5000)')
+    parser.add_argument('--epochs', type=int, default=None,
+                        help='Number of epochs to train for (overrides max_iters if specified)')
     parser.add_argument('--seed', type=int, default=1337,
                         help='Random seed for reproducibility (default: 1337)')
     parser.add_argument('--eval_interval', type=int, default=500,
@@ -54,6 +56,8 @@ def parse_args():
                         help='Custom path to save the output checkpoint (defaults to models/{dataset}{max_iters}.pt)')
     parser.add_argument('--reset_iter', action='store_true',
                         help='Reset iteration counter to 0 when loading from checkpoint')
+    parser.add_argument('--epoch_mode', action='store_true',
+                        help='Use epoch-based training instead of iteration-based training')
     return parser.parse_args()
 
 args = parse_args()
@@ -62,7 +66,6 @@ args = parse_args()
 if hasattr(args, 'no_color') and args.no_color:
     GREEN = YELLOW = BLUE = RED = MAGENTA = CYAN = ENDC = BOLD = UNDERLINE = ""
 
-# Set up logging
 # Set up logging
 logging.basicConfig(level=logging.INFO, format=f'{BLUE}%(asctime)s{ENDC} {GREEN}%(levelname)s:{ENDC} %(message)s')
 logger = logging.getLogger(__name__)
@@ -162,24 +165,64 @@ if os.path.exists(checkpoint_file) and (args.checkpoint is None or os.path.abspa
         else:
             print("Please enter 'y' or 'n'.")
 
+# loop counters starting point
+iter_num = 0
+
 # capture above settings & parameters to save in model checkpoint
 config_keys = [k for k,v in globals().items() 
                if not k.startswith('_') and isinstance(v, (int, float, bool, str))
                and not k in ('args', 'parser')]
 config = {k: globals()[k] for k in config_keys} 
 
-# tokens per iterations
+# Tokens per iterations
 tokens_per_iter = gradient_accumulation_steps * batch_size * block_size
-total_tokens = tokens_per_iter * (max_iters - iter_num)  # Account for already completed iterations
+
+# Load the data
+data_dir = 'data/'
+try:
+    train_data = np.memmap(os.path.join(data_dir, f'{dataset_name}-train.bin'), dtype=np.uint16, mode='r')
+    val_data = np.memmap(os.path.join(data_dir, f'{dataset_name}-val.bin'), dtype=np.uint16, mode='r')
+    print(f"Loaded {dataset_name} dataset: {len(train_data):,} training tokens, {len(val_data):,} validation tokens")
+except FileNotFoundError:
+    print(f"Error: Could not find {dataset_name} dataset files.")
+    print(f"Make sure to run data/prepare-{dataset_name}.py first.")
+    sys.exit(1)
+
+# Calculate total tokens based on training mode
+if args.epoch_mode:
+    # For epoch-based training, estimate tokens based on dataset size and epochs
+    data_size = len(train_data)
+    tokens_per_epoch = data_size - (data_size % (batch_size * block_size))  # Approximate tokens seen per epoch
+    if args.epochs is not None:
+        max_epochs = args.epochs
+    else:
+        # Calculate epochs from max_iters (approximate)
+        batches_per_epoch = tokens_per_epoch // (batch_size * block_size)
+        max_epochs = max_iters // batches_per_epoch if batches_per_epoch > 0 else 1
+    total_tokens = tokens_per_epoch * max_epochs
+else:
+    # For iteration-based training
+    total_tokens = tokens_per_iter * max_iters  # We're starting from iteration 0
 
 print(f"{BOLD}{BLUE}╔═══════════════════════════════════════════════════════╗{ENDC}")
 print(f"{BOLD}{BLUE}║                TRAINING CONFIGURATION                 ║{ENDC}")
 print(f"{BOLD}{BLUE}╚═══════════════════════════════════════════════════════╝{ENDC}")
 print(f"{BOLD}Dataset:{ENDC}          {GREEN}{dataset_name}{ENDC}")
-if iter_num > 0:
-    print(f"{BOLD}Starting iteration:{ENDC} {GREEN}{iter_num:,}{ENDC}")
-print(f"{BOLD}Max iterations:{ENDC}   {GREEN}{max_iters:,}{ENDC}")
-print(f"{BOLD}Iterations to run:{ENDC} {GREEN}{max_iters - iter_num:,}{ENDC}")
+print(f"{BOLD}Training mode:{ENDC}    {GREEN}{'Epoch-based' if args.epoch_mode else 'Iteration-based'}{ENDC}")
+
+if args.epoch_mode:
+    # Show epoch information
+    if 'epoch' in globals() and epoch > 0:
+        print(f"{BOLD}Starting epoch:{ENDC}   {GREEN}{epoch+1}/{max_epochs}{ENDC}")
+    else:
+        print(f"{BOLD}Epochs to run:{ENDC}    {GREEN}{max_epochs}{ENDC}")
+    print(f"{BOLD}Batches per epoch:{ENDC}{GREEN}{len(train_data) // (batch_size * block_size)}{ENDC}")
+else:
+    # Show iteration information
+    if iter_num > 0:
+        print(f"{BOLD}Starting iteration:{ENDC} {GREEN}{iter_num:,}{ENDC}")
+    print(f"{BOLD}Max iterations:{ENDC}   {GREEN}{max_iters:,}{ENDC}")
+    print(f"{BOLD}Iterations to run:{ENDC} {GREEN}{max_iters - iter_num:,}{ENDC}")
 print(f"{BOLD}Batch size:{ENDC}       {GREEN}{batch_size}{ENDC}")
 print(f"{BOLD}Block size:{ENDC}       {GREEN}{block_size}{ENDC}")
 print(f"{BOLD}Learning rate:{ENDC}    {GREEN}{learning_rate}{ENDC}")
@@ -199,24 +242,41 @@ torch.manual_seed(seed)
 
 # Device selection: auto-detect
 if torch.cuda.is_available():
-    # CUDA device selection
-    selected_device = None
+    # CUDA device selection - find device with most free memory
+    device_free_memory = []
+    max_free_memory = 0
+    best_device = 0
+    
     print("CUDA devices available:")
     for i in range(torch.cuda.device_count()):
         props = torch.cuda.get_device_properties(i)
         mem_free = torch.cuda.mem_get_info(i)[0] / (1024 ** 3)  # Free memory in GB
         mem_total = props.total_memory / (1024 ** 3)  # Total memory in GB
+        device_free_memory.append(mem_free)
+        
+        # Track device with most free memory
+        if mem_free > max_free_memory:
+            max_free_memory = mem_free
+            best_device = i
+            
         print(f"  [{i}] {props.name} - Free: {mem_free:.2f} GB / Total: {mem_total:.2f} GB")
-    while True:
+    
+    # Default to device with most free memory
+    selected_device = best_device
+    
+    # Only ask if there's more than one device
+    if torch.cuda.device_count() > 1:
+        print(f"{GREEN}Recommended device: [{best_device}] with {max_free_memory:.2f} GB free VRAM{ENDC}")
         try:
-            user_input = input(f"Select CUDA device [0-{torch.cuda.device_count()-1}]: ")
-            selected_device = int(user_input)
-            if 0 <= selected_device < torch.cuda.device_count():
-                break
-            else:
-                print("Invalid device index.")
+            user_input = input(f"Select CUDA device [0-{torch.cuda.device_count()-1}] (default: {best_device}): ")
+            # If user enters a value, use it; otherwise, keep the default
+            if user_input.strip():
+                selected_device = int(user_input)
+                if not (0 <= selected_device < torch.cuda.device_count()):
+                    print(f"Invalid device index, using recommended device {best_device} instead.")
+                    selected_device = best_device
         except Exception:
-            print("Please enter a valid integer.")
+            print(f"Invalid input, using recommended device {best_device} instead.")
     device = f'cuda:{selected_device}'
     print(f"Using device: {device}")
 elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
@@ -228,18 +288,54 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-# Load the data
-data_dir = 'data/'
-try:
-    train_data = np.memmap(os.path.join(data_dir, f'{dataset_name}-train.bin'), dtype=np.uint16, mode='r')
-    val_data = np.memmap(os.path.join(data_dir, f'{dataset_name}-val.bin'), dtype=np.uint16, mode='r')
-    print(f"Loaded {dataset_name} dataset: {len(train_data):,} training tokens, {len(val_data):,} validation tokens")
-except FileNotFoundError:
-    print(f"Error: Could not find {dataset_name} dataset files.")
-    print(f"Make sure to run data/prepare-{dataset_name}.py first.")
-    sys.exit(1)
+# create an epoch-based data loader
+class DataLoader:
+    def __init__(self, data, batch_size, block_size, shuffle=True):
+        self.data = data
+        self.batch_size = batch_size
+        self.block_size = block_size
+        self.shuffle = shuffle
+        self.n_batches = (len(data) - block_size) // block_size // batch_size
+        if self.n_batches == 0:
+            raise ValueError(f"Dataset too small ({len(data)} tokens) for batch size {batch_size} and block size {block_size}")
+        self.batch_idx = 0  # Initialize batch_idx in constructor
+        self.epoch_start_time = time.time()  # Track when the epoch started
+        self._create_batches()
 
-# get a batch from the data
+    def _create_batches(self):
+        # Create indices for all possible starting positions
+        self.indices = list(range(len(self.data) - self.block_size))
+        if self.shuffle:
+            random.shuffle(self.indices)
+        
+        # Group indices into batches
+        self.batches = []
+        for i in range(0, min(len(self.indices), self.n_batches * self.batch_size), self.batch_size):
+            if i + self.batch_size <= len(self.indices):
+                self.batches.append(self.indices[i:i+self.batch_size])
+
+    def __iter__(self):
+        self.batch_idx = 0
+        return self
+
+    def __next__(self):
+        if self.batch_idx >= len(self.batches):
+            raise StopIteration
+        
+        # Get current batch indices
+        batch_indices = self.batches[self.batch_idx]
+        self.batch_idx += 1
+        
+        # Create x and y tensors
+        x = torch.stack([torch.from_numpy((self.data[i:i+self.block_size]).astype(np.int64)) for i in batch_indices])
+        y = torch.stack([torch.from_numpy((self.data[i+1:i+1+self.block_size]).astype(np.int64)) for i in batch_indices])
+        
+        return x, y
+        
+    def __len__(self):
+        return len(self.batches)
+
+# get a batch from the data (for backward compatibility with the evaluation function)
 def get_batch(split):
     data = train_data if split == 'train' else val_data
     ix = torch.randint(len(data) - block_size, (batch_size,))
@@ -251,9 +347,6 @@ def get_batch(split):
     else:
         x, y = x.to(device), y.to(device)
     return x, y
-
-# loop counters starting point
-iter_num = 0
 
 # Initialize the model (either from scratch or from checkpoint)
 if args.checkpoint:
@@ -293,18 +386,29 @@ if args.checkpoint:
     if 'iter_num' in checkpoint:
         checkpoint_iter = checkpoint['iter_num']
         
+        # Load epoch data if available
+        checkpoint_epoch = checkpoint.get('epoch', 0)
+        checkpoint_epoch_iter = checkpoint.get('epoch_iter', 0)
+        
         if not args.reset_iter:
-            # Check if the model is already trained beyond our target max_iters
+            # Get target iterations based on mode
+            target_iters = max_iters
+            if args.epoch_mode and args.epochs is not None:
+                print(f"{GREEN}Continuing epoch-based training from epoch {checkpoint_epoch+1}{ENDC}")
+            
+            # Check if the model is already trained beyond our target max_iters or epochs
             if checkpoint_iter >= max_iters:
                 print(f"\n{YELLOW}Warning: The loaded model has already been trained for {checkpoint_iter} iterations,{ENDC}")
                 print(f"{YELLOW}which is more than or equal to your requested max_iters ({max_iters}).{ENDC}")
-                print(f"{YELLOW}This means no additional training will occur unless you increase max_iters or use --reset_iter.{ENDC}\n")
+                if args.epoch_mode and 'epoch' in checkpoint:
+                    print(f"{YELLOW}The model completed {checkpoint_epoch+1} epochs already.{ENDC}")
+                print(f"{YELLOW}This means no additional training will occur unless you increase iterations/epochs or use --reset_iter.{ENDC}\n")
                 
                 while True:
                     response = input(f"{BOLD}How do you want to proceed?{ENDC}\n"
                                     f"1) Continue with current settings (no additional training)\n"
-                                    f"2) Reset iteration counter to 0\n"
-                                    f"3) Increase max_iters\n"
+                                    f"2) Reset iteration/epoch counters to 0\n"
+                                    f"3) Increase {'epochs' if args.epoch_mode else 'max_iters'}\n"
                                     f"4) Quit\n"
                                     f"Enter choice [1-4]: ").strip()
                     
@@ -452,6 +556,10 @@ def save_model(fn):
     }
     # Add dataset information to the checkpoint
     checkpoint['dataset'] = dataset_name
+    # Add epoch information if using epoch-based training
+    if args.epoch_mode and 'epoch' in globals():
+        checkpoint['epoch'] = epoch
+        checkpoint['epoch_iter'] = epoch_iter
     # Add timestamp for tracking when the checkpoint was created
     checkpoint['timestamp'] = str(datetime.datetime.now())
     
@@ -496,59 +604,158 @@ stat_lr = []
 
 # TRAINING LOOP
 try:
-    # init loop
-    X, Y = get_batch('train') # fetch the very first batch
     t0 = time.time()
-    local_iter_num = 0 # number of iterations in the lifetime of this process
+    local_iter_num = 0  # number of iterations in the lifetime of this process
     raw_model = model
-    running_mfu = -1.0 # Memory Footprint Utilization on GPU
+    running_mfu = -1.0  # Memory Footprint Utilization on GPU
+    
+    # Configure the training mode (epoch-based or iteration-based)
+    if args.epoch_mode:
+        # Create data loader for epoch-based training
+        train_loader = DataLoader(train_data, batch_size, block_size, shuffle=True)
+        
+        # Set up validation loader if needed
+        val_loader = None  # Uncomment to create a validation loader
+        
+        # Initialize counters for epoch tracking
+        epoch = 0
+        epoch_iter = 0
+        epoch_loss = 0.0
+        train_loader.epoch_start_time = time.time()
+        
+        # Determine number of epochs to run
+        max_epochs = args.epochs if args.epochs is not None else 1
+        
+        # Calculate header length to ensure proper alignment
+        header_length = 42  # Fixed width for the header box
+        epoch_text = f"EPOCH 1 OF {max_epochs}"
+        padding = " " * ((header_length - len(epoch_text)) // 2)  # Calculate padding for centering
+        right_padding = " " * (header_length - len(epoch_text) - len(padding))  # Adjust right padding for exact width
+        
+        # Add a colorful header for the first epoch
+        print(f"\n{BOLD}Starting training in epoch mode: {max_epochs} epochs, {len(train_loader)} batches per epoch{ENDC}\n")
+    
+        print(f"\n{BOLD}{BLUE}╔══════════════════════════════════════════╗{ENDC}")
+        print(f"{BOLD}{BLUE}║{padding}{epoch_text}{right_padding}║{ENDC}")
+        print(f"{BOLD}{BLUE}╚══════════════════════════════════════════╝{ENDC}")     
 
+        # Show total iterations that will be performed
+        max_iters = max_epochs * len(train_loader)
+    else:
+        # Traditional iteration-based training
+        # Fetch the very first batch
+        X, Y = get_batch('train')
+        print(f"\n{BOLD}Starting training in iteration mode: {max_iters} iterations{ENDC}\n")
+    
+    # Main training loop
     while True:
-        try:
-            # determine and set the learning rate for this iteration
-            lr = get_lr(iter_num) if decay_lr else learning_rate
-            if lr > 0:
-                stat_lr.append(lr)
-                stat_lr_iter.append(iter_num)
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr
+        # Break condition for iteration-based training
+        if not args.epoch_mode and iter_num >= max_iters:
+            # Show 100% progress bar
+            bar = '█' * 30  # Completely filled bar
+            print(f"{YELLOW}[{bar}]{ENDC} {BOLD}{max_iters}/{max_iters}{ENDC} | " 
+                  f"{CYAN}100.0%{ENDC} | "
+                  f"{GREEN}Training complete!{ENDC}")
             
-            # evaluate the loss on train/val sets and write checkpoints
-            if iter_num % 100 == 0 or iter_num >= max_iters:
-                # Call estimate_loss which handles model.eval() and model.train() internally
-                losses = estimate_loss()
-                
-                # Format nicer output with colors
-                elapsed = time.time() - t0
-                progress = iter_num / max_iters * 100 if max_iters > 0 else 0
-                eta_seconds = (max_iters - iter_num) * (elapsed / (iter_num + 1))
-                eta_str = str(datetime.timedelta(seconds=int(eta_seconds)))
-                
-                print(f"{BOLD}{BLUE}══════════════════════════════════════════════════════════{ENDC}")
-                print(f"{BOLD}{BLUE}STEP {iter_num}/{max_iters}{ENDC} {YELLOW}[{progress:.1f}%]{ENDC} {MAGENTA}ETA: {eta_str}{ENDC}")
-                print(f"{GREEN}TRAIN LOSS: {losses['train']:.4f}{ENDC}  {CYAN}VAL LOSS: {losses['val']:.4f}{ENDC}")
-                print(f"{BOLD}{BLUE}══════════════════════════════════════════════════════════{ENDC}")
-                
-                if iter_num > 0:
+            print(f"{GREEN}Reached maximum number of iterations ({max_iters}){ENDC}")
+            break
+            
+        # Break condition for epoch-based training
+        if args.epoch_mode and epoch >= max_epochs:
+            print(f"{GREEN}Reached maximum number of epochs ({max_epochs}){ENDC}")
+            break
+        
+        try:
+            # Get the next batch based on training mode
+            if args.epoch_mode:
+                # For epoch-based training
+                if epoch_iter >= len(train_loader):
+                    # End of epoch
+                    epoch_duration = time.time() - train_loader.epoch_start_time
+                    
+                    # Show 100% completion bar for satisfying closure
+                    epoch_bar = '█' * 30  # Completely filled bar
+                    print(f"{YELLOW}[{epoch_bar}]{ENDC} {BOLD}Epoch {epoch+1}/{max_epochs}{ENDC} | "
+                          f"{CYAN}Batch {len(train_loader)}/{len(train_loader)}{ENDC} | "
+                          f"{MAGENTA}100.0%{ENDC} | "
+                          f"Loss: {lossf:.4f} | "
+                          f"{GREEN}Complete!{ENDC}")
+                    
+                    print(f"\n{BOLD}{GREEN}==== Epoch {epoch+1}/{max_epochs} Complete ===={ENDC}")
+                    print(f"{CYAN}Duration: {str(datetime.timedelta(seconds=int(epoch_duration)))}{ENDC}")
+                    print(f"{CYAN}Average Loss: {epoch_loss/epoch_iter:.4f}{ENDC}")
+                    
+                    # Run evaluation at the end of each epoch
+                    losses = estimate_loss()
+                    print(f"{GREEN}Train Loss: {losses['train']:.4f}{ENDC}  {MAGENTA}Val Loss: {losses['val']:.4f}{ENDC}")
+                    print(f"{YELLOW}Progress: {epoch+1}/{max_epochs} epochs ({(epoch+1)/max_epochs*100:.1f}%){ENDC}\n")
+                    
+                    # Save checkpoint at the end of each epoch
                     save_success = save_model(checkpoint_file)
                     if not save_success:
-                        logger.warning(f"{BOLD}{YELLOW}Failed to save checkpoint at iteration {iter_num}. Will try again later.{ENDC}")
+                        logger.warning(f"{YELLOW}Failed to save checkpoint after epoch {epoch+1}. Will try again later.{ENDC}")
+                    
+                    # Prepare for next epoch
+                    epoch += 1
+                    if epoch >= max_epochs:
+                        # We're done with training
+                        break
+                        
+                    # Reset for the next epoch
+                    epoch_iter = 0
+                    epoch_loss = 0.0
+                    train_loader._create_batches()  # Re-shuffle the data
+                    train_loader.epoch_start_time = time.time()
+                    
+                    # Calculate header length to ensure proper alignment
+                    header_length = 42  # Fixed width for the header box
+                    epoch_text = f"EPOCH {epoch+1} OF {max_epochs}"
+                    padding = " " * ((header_length - len(epoch_text)) // 2)  # Calculate padding for centering
+                    right_padding = " " * (header_length - len(epoch_text) - len(padding))  # Adjust right padding for exact width
+                    
+                    # Add a colorful header for the new epoch
+                    print(f"\n{BOLD}{BLUE}╔══════════════════════════════════════════╗{ENDC}")
+                    print(f"{BOLD}{BLUE}║{padding}{epoch_text}{right_padding}║{ENDC}")
+                    print(f"{BOLD}{BLUE}╚══════════════════════════════════════════╝{ENDC}")
                 
-                # record stats
-                stat_iter.append(iter_num)
-                stat_loss_train.append(losses['train'])
-                stat_loss_val.append(losses['val'])
-        
+                # Get batch from train_loader using iterator protocol
+                if epoch_iter == 0:
+                    # Create a new iterator at the start of each epoch
+                    train_iter = iter(train_loader)
+                
+                try:
+                    X, Y = next(train_iter)
+                    # Move data to device
+                    if device_type == 'cuda':
+                        X = X.pin_memory().to(device, non_blocking=True)
+                        Y = Y.pin_memory().to(device, non_blocking=True)
+                    else:
+                        X = X.to(device)
+                        Y = Y.to(device)
+                    epoch_iter += 1
+                except StopIteration:
+                    # This shouldn't happen if we reset properly at the end of each epoch
+                    # but just in case
+                    logger.warning(f"{YELLOW}StopIteration encountered mid-epoch. This shouldn't happen.{ENDC}")
+                    continue
+            else:
+                # For iteration-based training, use the get_batch function
+                X, Y = get_batch('train')
+            
             # FORWARD PROP, update with optional gradient accumulation to simulate larger batch size
             # and using the GradScaler if data type is float16
             for micro_step in range(gradient_accumulation_steps):
                 with ctx:
                     logits, loss = model(X, Y)
                     loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
-                # immediately async prefetch next batch while model is doing the forward pass on the GPU
-                X, Y = get_batch('train')
+                
+                # For iteration-based training, immediately async prefetch next batch while model is doing the forward pass
+                if not args.epoch_mode:
+                    X, Y = get_batch('train')
+                    
                 # with gradient scaling if training in fp16
                 scaler.scale(loss).backward()
+                
             # clip the gradient - to avoid exploding gradients
             if grad_clip != 0.0:
                 scaler.unscale_(optimizer)
@@ -567,6 +774,9 @@ try:
             # get loss as float. note: this is a CPU-GPU sync point
             # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
             lossf = loss.item() * gradient_accumulation_steps
+            if args.epoch_mode:
+                epoch_loss += lossf
+            
             if local_iter_num >= 5: # let the training loop settle a bit
                 mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
                 running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
@@ -579,17 +789,50 @@ try:
                 filled_length = int(bar_length * iter_num / max_iters) if max_iters > 0 else 0
                 bar = '█' * filled_length + '░' * (bar_length - filled_length)
                 
-                print(f"{YELLOW}[{bar}]{ENDC} {BOLD}{iter_num}/{max_iters}{ENDC} | " 
-                      f"{CYAN}Loss: {lossf:.4f}{ENDC} | "
-                      f"{GREEN}Time: {dt*1000:.2f}ms{ENDC} | "
-                      f"{MAGENTA}MFU: {running_mfu*100:.2f}%{ENDC}")
+                if args.epoch_mode:
+                    # Enhanced progress indication for epoch-based training
+                    epoch_progress = epoch_iter / len(train_loader) * 100
+                    epoch_bar_filled = int(bar_length * epoch_iter / len(train_loader))
+                    epoch_bar = '█' * epoch_bar_filled + '░' * (bar_length - epoch_bar_filled)
+                    
+                    # Calculate ETA for current epoch
+                    if epoch_iter > 0:
+                        epoch_start_time = getattr(train_loader, 'epoch_start_time', t0)
+                        time_per_batch = (time.time() - epoch_start_time) / epoch_iter
+                        eta_seconds = time_per_batch * (len(train_loader) - epoch_iter)
+                        eta_str = str(datetime.timedelta(seconds=int(eta_seconds)))
+                        samples_per_sec = batch_size / dt if dt > 0 else 0
+                        
+                        print(f"{YELLOW}[{epoch_bar}]{ENDC} {BOLD}Epoch {epoch+1}/{max_epochs}{ENDC} | "
+                              f"{CYAN}Batch {epoch_iter}/{len(train_loader)}{ENDC} | "
+                              f"{MAGENTA}{epoch_progress:.1f}%{ENDC} | "
+                              f"Loss: {lossf:.4f} | "
+                              f"{GREEN}ETA: {eta_str}{ENDC} | "
+                              f"Samples/s: {samples_per_sec:.1f}")
+                    else:
+                        # Set start time when beginning a new epoch
+                        if not hasattr(train_loader, 'epoch_start_time'):
+                            train_loader.epoch_start_time = time.time()
+                        print(f"{YELLOW}[{epoch_bar}]{ENDC} {BOLD}Epoch {epoch+1}/{max_epochs}{ENDC} | "
+                              f"{CYAN}Batch {epoch_iter}/{len(train_loader)}{ENDC} | "
+                              f"{MAGENTA}{epoch_progress:.1f}%{ENDC} | "
+                              f"Loss: {lossf:.4f}")
+                else:
+                    print(f"{YELLOW}[{bar}]{ENDC} {BOLD}{iter_num}/{max_iters}{ENDC} | " 
+                          f"{CYAN}Loss: {lossf:.4f}{ENDC} | "
+                          f"{GREEN}Time: {dt*1000:.2f}ms{ENDC} | "
+                          f"{MAGENTA}MFU: {running_mfu*100:.2f}%{ENDC}")
             
             iter_num += 1
             local_iter_num += 1
         
             # termination conditions
-            if iter_num >= max_iters:
-                break
+            if args.epoch_mode:
+                if epoch >= max_epochs:
+                    break
+            else:
+                if iter_num >= max_iters:
+                    break
         except Exception as e:
             logger.error(f"Exception occurred: {e}")
             logger.info("Saving checkpoint due to exception.")
@@ -627,12 +870,31 @@ except KeyboardInterrupt:
     print(f"{BOLD}{BLUE}║                TRAINING INTERRUPTED                   ║{ENDC}")
     print(f"{BOLD}{BLUE}╚═══════════════════════════════════════════════════════╝{ENDC}")
     print(f"{BOLD}Completed iterations:{ENDC} {GREEN}{iter_num}/{max_iters}{ENDC}")
-    print(f"{BOLD}Final train loss:{ENDC}     {GREEN}{final_train_loss:.4f if isinstance(final_train_loss, float) else final_train_loss}{ENDC}")
-    print(f"{BOLD}Final val loss:{ENDC}       {GREEN}{final_val_loss:.4f if isinstance(final_val_loss, float) else final_val_loss}{ENDC}")
+    
+    # Format losses properly based on their type
+    if isinstance(final_train_loss, float):
+        train_loss_str = f"{GREEN}{final_train_loss:.4f}{ENDC}"
+    else:
+        train_loss_str = f"{GREEN}{final_train_loss}{ENDC}"
+        
+    if isinstance(final_val_loss, float):
+        val_loss_str = f"{GREEN}{final_val_loss:.4f}{ENDC}"
+    else:
+        val_loss_str = f"{GREEN}{final_val_loss}{ENDC}"
+    
+    print(f"{BOLD}Final train loss:{ENDC}     {train_loss_str}")
+    print(f"{BOLD}Final val loss:{ENDC}       {val_loss_str}")
     print(f"{BOLD}Checkpoint saved to:{ENDC} {GREEN}{checkpoint_file}{ENDC}")
     
 # Final save and summary at normal completion
 if iter_num >= max_iters:
+    # Display final 100% progress bar for overall training
+    if args.epoch_mode:
+        total_bar = '█' * 30  # Completely filled bar
+        print(f"\n{YELLOW}[{total_bar}]{ENDC} {BOLD}Training complete!{ENDC} | "
+              f"{MAGENTA}100.0%{ENDC} | "
+              f"All {max_epochs} epochs finished")
+    
     print(f"\n{BOLD}{BLUE}Training completed. Running final evaluation...{ENDC}")
     
     # Run a final evaluation to get accurate loss values

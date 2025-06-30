@@ -76,6 +76,19 @@ def setup_device(device_arg):
     # Default to auto-detection
     if device_arg is None:
         if torch.cuda.is_available():
+            # If there's only one GPU, use it automatically
+            if torch.cuda.device_count() == 1:
+                props = torch.cuda.get_device_properties(0)
+                mem_free = torch.cuda.mem_get_info(0)[0] / (1024 ** 3)  # Free memory in GB
+                mem_total = props.total_memory / (1024 ** 3)  # Total memory in GB
+                print(f"{BLUE}Using CUDA device:{ENDC}")
+                print(f"  [0] {props.name} - Free: {mem_free:.2f} GB / Total: {mem_total:.2f} GB")
+                return 'cuda:0', 'cuda'
+            
+            # For multiple GPUs, find the one with most free memory
+            best_device = 0
+            max_free_mem = 0
+            
             # Show CUDA device information and prompt for selection
             print(f"{BLUE}CUDA devices available:{ENDC}")
             for i in range(torch.cuda.device_count()):
@@ -84,11 +97,19 @@ def setup_device(device_arg):
                 mem_total = props.total_memory / (1024 ** 3)  # Total memory in GB
                 print(f"  [{i}] {props.name} - Free: {mem_free:.2f} GB / Total: {mem_total:.2f} GB")
                 
+                # Track device with most free memory
+                if mem_free > max_free_mem:
+                    max_free_mem = mem_free
+                    best_device = i
+            
+            # Highlight the recommended device with the most free VRAM
+            print(f"{GREEN}Recommended: Device [{best_device}] has the most free VRAM ({max_free_mem:.2f} GB){ENDC}")
+                
             while True:
                 try:
-                    user_input = input(f"{BLUE}Select CUDA device [0-{torch.cuda.device_count()-1}] (default: 0): {ENDC}")
+                    user_input = input(f"{BLUE}Select CUDA device [0-{torch.cuda.device_count()-1}] (default: {best_device}): {ENDC}")
                     if not user_input:
-                        selected_device = 0
+                        selected_device = best_device
                         break
                     selected_device = int(user_input)
                     if 0 <= selected_device < torch.cuda.device_count():
@@ -204,13 +225,15 @@ def load_prompt(args):
     
     return args.prompt
 
-def process_prompt(prompt, device, use_extended=True):
+def process_prompt(prompt, device, use_extended=True, verbose=False):
     """Process the input prompt."""
     # Use the extended tokenizer if requested and available
     if use_extended:
         try:
             enc = get_extended_tokenizer()
-            print(f"{BLUE}Using extended tokenizer with special tokens{ENDC}")
+            # Only show in verbose mode
+            if verbose:
+                print(f"{BLUE}Using extended tokenizer with special tokens{ENDC}")
         except Exception as e:
             print(f"{YELLOW}Warning: Could not initialize extended tokenizer: {str(e)}{ENDC}")
             print(f"{YELLOW}Falling back to standard GPT-2 tokenizer{ENDC}")
@@ -218,7 +241,9 @@ def process_prompt(prompt, device, use_extended=True):
     else:
         enc = tiktoken.get_encoding("gpt2")
     
-    print(f"{BLUE}Prompt:{ENDC} {repr(prompt)}")
+    # Only show prompt in verbose mode
+    if verbose:
+        print(f"{BLUE}Prompt:{ENDC} {repr(prompt)}")
     try:
         # Always use allowed_special="all" to handle special tokens
         start_ids = enc.encode(prompt, allowed_special="all")
@@ -274,10 +299,24 @@ def process_token(token, enc, nonstop, verbose=False):
     if token == eot_token:
         if verbose:
             print(f"\n{BLUE}[TOKEN {token} = <|endoftext|>]{ENDC}")
-        print(f"\n{GREEN}--- The End ---{ENDC}\n")
+            print(f"\n{GREEN}--- The End ---{ENDC}\n")
+        # For non-verbose, just end generation without displaying message
         if not nonstop:
             return None
         return "\n"
+        
+    # Handle ChatML im_end token (for any token ID that might represent it)
+    # First try to decode it to see if it's the special token
+    try:
+        text = enc.decode([token])
+        if text == "<|im_end|>" or (token == 50258):
+            if verbose:
+                print(f"\n{BLUE}[TOKEN {token} = <|im_end|>]{ENDC}")
+            # For non-verbose mode, we'll just ignore this token completely
+            # by returning empty string - it will be handled by process_and_print_token
+            return "" if not verbose else "<|im_end|>"
+    except:
+        pass  # If decoding fails, continue with normal processing
     
     try:
         # Safely decode the token
@@ -324,10 +363,9 @@ def generate_text(model, x, start_ids, enc, args, ctx):
     output_text = ""
     buffer = ""  # Buffer to collect special tokens
     in_special_token = False
-    
-    print("\n" + "=" * 40 + "\n")
-    print(f"{GREEN}Generating text (max tokens: {'∞' if args.nonstop else args.max_tokens}, "
-          f"temp: {args.temp}, top_k: {args.top_k}{', verbose mode' if args.verbose else ''})...{ENDC}\n")
+    if args.verbose:
+        print(f"\n{GREEN}Generating text (max tokens: {'∞' if args.nonstop else args.max_tokens}, "
+            f"temp: {args.temp}, top_k: {args.top_k}{', verbose mode' if args.verbose else ''})...{ENDC}\n")
     
     delay = 0 if args.no_delay else 0.005
     token_count = 0
@@ -360,13 +398,42 @@ def generate_text(model, x, start_ids, enc, args, ctx):
             print_token(text, delay, verbose)
             return
             
+        # Direct handling of im_end token if it comes as a complete token
+        if text == "<|im_end|>":
+            # Completely ignore the token
+            return
+            
         # In normal mode, handle special tokens
         if in_buffer:
+            # Before adding to buffer, check if we're building an <|im_end|> token
+            test_buffer = buffer + text
+            
+            # If we've detected the im_end token (even partially), don't add it
+            if test_buffer == '<|im_end|>' or '<|im_end|>'.startswith(test_buffer):
+                if test_buffer == '<|im_end|>':
+                    # We've found a complete im_end token, reset buffer and ignore it
+                    buffer = ""
+                    in_special_token = False
+                else:
+                    # We're in the middle of building an im_end token, keep in buffer
+                    buffer = test_buffer
+                return
+                
+            # Normal case - add to buffer    
             buffer += text
             
             # Check if we have a complete special token
             if is_special_token(buffer):
-                # We found a complete special token - add to output but don't print
+                # We found a complete special token
+                
+                # For <|im_end|>, don't add to output_text at all in normal mode
+                if buffer == '<|im_end|>':
+                    # Just reset buffer and continue
+                    buffer = ""
+                    in_special_token = False
+                    return
+                    
+                # For other special tokens, add to output but don't print
                 output_text += buffer
                 
                 # Check if there's text after the special token (e.g., role name)
@@ -471,7 +538,6 @@ def generate_text(model, x, start_ids, enc, args, ctx):
         # Restore original handler
         signal.signal(signal.SIGINT, original_sigint)
     
-    print("\n")
     return output_text
 
 def save_output(text, filename):
@@ -509,7 +575,7 @@ def interactive_mode(model, enc, args, ctx, device):
                 prompt = "\n"  # Default to newline for empty prompts
                 
             # Process prompt and generate text
-            x, start_ids, _ = process_prompt(prompt, device)
+            x, start_ids, _ = process_prompt(prompt, device, verbose=args.verbose)
             output_text = generate_text(model, x, start_ids, enc, args, ctx)
             
             # Save output if requested
@@ -559,7 +625,7 @@ def interactive_chat_mode(model, enc, args, ctx, device):
     """Run interactive chat mode with proper formatting."""
     print(f"\n{BLUE}========================================"
           f"\n   Interactive Chat Mode"
-          f"\n   Type 'exit', 'quit', or press Ctrl+C to exit"
+          f"\n   Type 'exit' or press Ctrl+C to exit"
           f"\n========================================{ENDC}\n")
     
     # Initialize conversation
@@ -567,7 +633,9 @@ def interactive_chat_mode(model, enc, args, ctx, device):
         # Initialize the extended tokenizer for chat mode
         try:
             enc = get_extended_tokenizer()
-            print(f"{BLUE}Using extended tokenizer with special tokens for chat{ENDC}")
+            # Only show in verbose mode
+            if args.verbose:
+                print(f"{BLUE}Using extended tokenizer with special tokens for chat{ENDC}")
         except Exception as e:
             print(f"{YELLOW}Warning: Could not initialize extended tokenizer: {str(e)}{ENDC}")
             print(f"{YELLOW}Falling back to standard GPT-2 tokenizer{ENDC}")
@@ -583,6 +651,7 @@ def interactive_chat_mode(model, enc, args, ctx, device):
         while True:
             # Get user input
             user_input = input(f"{GREEN}User: {ENDC}")
+            print("")
             
             # Check for exit commands
             if user_input.lower().strip() in ['exit', 'quit', 'bye', '/exit', '/quit']:
@@ -605,7 +674,7 @@ def interactive_chat_mode(model, enc, args, ctx, device):
             prompt += "\n<|im_start|>assistant\n"
             
             # Process prompt and generate text
-            x, start_ids, _ = process_prompt(prompt, device, use_extended=True)
+            x, start_ids, _ = process_prompt(prompt, device, use_extended=True, verbose=args.verbose)
             
             # Create a copy of args with a lower max_tokens for chat responses
             chat_args = argparse.Namespace(**vars(args))
@@ -615,40 +684,31 @@ def interactive_chat_mode(model, enc, args, ctx, device):
             print(f"{BLUE}Assistant: {ENDC}", end='', flush=True)
             output_text = generate_text(model, x, start_ids, enc, chat_args, ctx)
             
-            # Clean up the response
-            # Remove any incomplete special tokens
-            if output_text.endswith("<|"):
-                output_text = output_text[:-2].rstrip()
-            elif output_text.endswith("<|im"):
-                output_text = output_text[:-4].rstrip()
-            elif output_text.endswith("<|im_"):
-                output_text = output_text[:-5].rstrip()
-            
-            # Extract just the assistant's response
-            if "<|im_end|>" in output_text:
-                output_text = output_text.split("<|im_end|>")[0].strip()
-            
-            # Clean up any special tokens that might remain
+            # Clean up any special tokens that might have made it through
             output_text = output_text.replace("<|im_start|>", "").replace("<|im_end|>", "")
             
-            # Remove repeated role patterns
-            role_patterns = ["user", "assistant", "system"]
-            for pattern in role_patterns:
-                if output_text.startswith(pattern + "\n"):
-                    output_text = output_text[len(pattern)+1:].lstrip()
+            # More aggressive cleanup for any special token fragments
+            output_text = output_text.rstrip()
             
-            # Handle cases where the model starts generating a new conversation turn
-            for pattern in role_patterns:
-                if f"\n{pattern}\n" in output_text:
-                    output_text = output_text.split(f"\n{pattern}\n")[0].strip()
+            # Check for full special tokens
+            for token in ["<|im_end|>", "<|im_start|>", "<|endoftext|>"]:
+                if output_text.endswith(token):
+                    output_text = output_text[:-len(token)].rstrip()
             
-            # Remove any lines containing only role names
-            lines = output_text.split('\n')
-            filtered_lines = []
-            for line in lines:
-                if line.strip() not in role_patterns:
-                    filtered_lines.append(line)
-            output_text = '\n'.join(filtered_lines)
+            # Check for partial token fragments (conservative approach)
+            for token in ["<|im_end|>", "<|im_start|>", "<|endoftext|>"]:
+                for i in range(1, len(token)):
+                    if output_text.endswith(token[:i]):
+                        output_text = output_text[:-i].rstrip()
+                        break
+                        
+            # Final sanity check for anything that looks like a special token at the end
+            if output_text.endswith("<|") or output_text.endswith("<|i") or output_text.endswith("<|im"):
+                # Find the last proper sentence/punctuation and trim to that
+                for i in range(len(output_text) - 1, max(0, len(output_text) - 50), -1):
+                    if i >= 0 and output_text[i] in ".!?":
+                        output_text = output_text[:i+1]
+                        break
             
             # Add assistant response to conversation history
             conversation.append({'role': 'assistant', 'content': output_text})
@@ -669,7 +729,7 @@ def main():
     """Main function to run the generator."""
     print(f"\n{BOLD}{BLUE}========================================\n"
           "   Jojo LLM Text Generation Utility\n"
-          "========================================{ENDC}\n")
+          f"========================================{ENDC}\n")
     
     # Parse arguments
     args = parse_args()
@@ -691,13 +751,13 @@ def main():
         # Load a base prompt
         prompt = load_prompt(args)
         # Get tokenizer
-        x, start_ids, enc = process_prompt(prompt, device, use_extended=use_extended)
+        x, start_ids, enc = process_prompt(prompt, device, use_extended=use_extended, verbose=args.verbose)
         # Run standard interactive mode
         interactive_mode(model, enc, args, ctx, device)
     else:
         # Standard generation mode
         prompt = load_prompt(args)
-        x, start_ids, enc = process_prompt(prompt, device, use_extended=use_extended)
+        x, start_ids, enc = process_prompt(prompt, device, use_extended=use_extended, verbose=args.verbose)
         output_text = generate_text(model, x, start_ids, enc, args, ctx)
         
         # Save output if requested

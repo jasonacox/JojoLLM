@@ -185,6 +185,8 @@ This will start an interactive chat session that:
 For more information on implementation details, see the `setup_tokenizer.py` and
 `tokenizer_demo.py` files.
 
+<img width="569" alt="image" src="https://github.com/user-attachments/assets/30891367-de3a-4244-a1a2-80c4a899e949" />
+
 ## Notes
 
 - Checkpoints are saved automatically during training at regular intervals and on interruption or error.
