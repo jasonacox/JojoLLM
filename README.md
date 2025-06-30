@@ -2,6 +2,8 @@
 
 This project aims to build a large language model (LLM) from scratch, inspired by the GPT-2 architecture. We will begin training on the TinyStories dataset and gradually expand to include LLM-generated educational content. Over time, the model will be enhanced to better understand language and interaction.
 
+<img width="569" alt="image" src="https://github.com/user-attachments/assets/30891367-de3a-4244-a1a2-80c4a899e949" />
+
 ## Goals
 
 - Implement a GPT-2 style model in PyTorch.
