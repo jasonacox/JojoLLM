@@ -92,4 +92,5 @@ data/dailydialog-train.txt
 *.zip
 dailydialog/
 models/
-
+*boundaries.txt
+*tokens.txt

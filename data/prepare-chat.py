@@ -273,7 +273,10 @@ def main():
             
             # Encode with tiktoken gpt2
             try:
-                enc = tiktoken.get_encoding("gpt2")
+                # Replace standard tokenizer with extended tokenizer 
+                from setup_tokenizer import get_extended_tokenizer
+                enc = get_extended_tokenizer()  # Use extended tokenizer instead of standard
+                print("Using extended tokenizer with special token support...")
                 print("Encoding training data...")
                 train_ids = enc.encode(train_text, allowed_special="all")
                 print("Encoding validation data...")

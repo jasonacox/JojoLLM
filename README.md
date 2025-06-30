@@ -17,7 +17,7 @@ This project aims to build a large language model (LLM) from scratch, inspired b
 - `model.py`: Defines the layers of the GPT model used in this project.
 - `gen.py`: Generate output from the model based on an input.
 - `setup_tokenizer.py`: Provides the extended tokenizer with special token support.
-- `prepare_with_extended_tokenizer.py`: Re-processes datasets using the extended tokenizer.
+- `prepare.py`: Re-processes datasets using the extended tokenizer.
 - `tokenizer_demo.py`: Demonstrates how to use the extended tokenizer.
 - `test_extended_tokenizer.py`: Tests the extended tokenizer functionality.
 
@@ -28,7 +28,7 @@ This project aims to build a large language model (LLM) from scratch, inspired b
 - `model.py`: Defines the layers of the GPT model used in this project
 - `train.py`: Create and train the model from scratch
 - `setup_tokenizer.py`: Implementation of the extended tokenizer with special token support
-- `prepare_with_extended_tokenizer.py`: Utility to process datasets using the extended tokenizer
+- `prepare.py`: Utility to process datasets using the extended tokenizer
 - `tokenizer_demo.py`: Demonstrates how to use the extended tokenizer
 
 ### Data Preparation
@@ -68,7 +68,7 @@ This project aims to build a large language model (LLM) from scratch, inspired b
 4. **Train the model:**
    Run the training script. If you have a CUDA-capable GPU, you will be prompted to select which GPU to use.
    ```bash
-   python train.py [--dataset DATASET] [--max_iters MAX_ITERS]
+   python train.py [--dataset DATASET] [--max_iters MAX_ITERS] [options]
    ```
    
    Available options:
@@ -79,6 +79,12 @@ This project aims to build a large language model (LLM) from scratch, inspired b
      - `chitchat`: Simple greetings and short exchanges for basic social interactions
    - `--max_iters`: Set the total number of training iterations (default: 5000)
    - `--seed`: Set random seed for reproducibility (default: 1337)
+   - `--eval_interval`: How often to run evaluation (default: 500)
+   - `--log_interval`: How often to log training progress (default: 10)
+   - `--no-color`: Disable colored output
+   - `--checkpoint`: Path to a checkpoint file to continue training from
+   - `--output_checkpoint`: Custom path to save the output checkpoint
+   - `--reset_iter`: Reset iteration counter to 0 when loading from checkpoint
    
    Examples:
    ```bash
@@ -93,10 +99,20 @@ This project aims to build a large language model (LLM) from scratch, inspired b
    
    # Train for more iterations
    python train.py --max_iters 10000
+   
+   # Continue training from a checkpoint with a different dataset
+   python train.py --checkpoint models/story5000.pt --dataset chat
+   
+   # Continue training but reset the iteration counter to 0
+   python train.py --checkpoint models/story5000.pt --dataset chat --reset_iter
+   
+   # Specify a custom output checkpoint path
+   python train.py --dataset chat --output_checkpoint models/custom_name.pt
    ```
    
    - The script will display all available CUDA devices and their memory.
    - Enter the device number you wish to use when prompted.
+   - When using an existing checkpoint, the script will check if it has already been trained beyond the requested max_iters and provide options.
 
 5. **Generate text:**
    After training, you can generate text using your trained model:
@@ -171,6 +187,12 @@ For more information on implementation details, see the `setup_tokenizer.py` and
 
 ## Notes
 
-- Checkpoints are saved automatically during training and on interruption or error.
-- You can resume training from a checkpoint by modifying the script (resume logic placeholder is present).
+- Checkpoints are saved automatically during training at regular intervals and on interruption or error.
+- Checkpoint files include model weights, optimizer state, iteration count, and configuration settings.
+- The training script provides robust checkpoint handling:
+  - You can continue training from any checkpoint with the `--checkpoint` option
+  - The script will detect if a checkpoint has already been trained beyond your requested iterations
+  - You can reset the iteration counter with `--reset_iter` to start counting from zero
+  - You can specify custom output paths with `--output_checkpoint`
+  - The script uses safe file operations to prevent checkpoint corruption
 - All dependencies are listed in `requirements.txt`.
