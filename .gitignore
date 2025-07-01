@@ -94,3 +94,8 @@ dailydialog/
 models/
 *boundaries.txt
 *tokens.txt
+sandbox/
+data/squad-train-v2.0.json
+tmp/empatheticdialogues.tar.gz
+tmp/empatheticdialogues/*.csv
+

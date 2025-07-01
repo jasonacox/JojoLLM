@@ -20,9 +20,13 @@ Usage:
     # 1. Process all .txt datasets in the data/ directory
     # 2. Create corresponding .bin files with tokenized data
     # 3. Generate .tokens.txt and .boundaries.txt debug files
+    
+    # Process a specific dataset:
+    python prepare.py --dataset DATASET_NAME
+    # Where DATASET_NAME is one of: chat, chitchat, story, knowledge, dictionary
 
 Author: Jason A. Cox
-2025 June 28
+2025 June 30
 https://github.com/jasonacox/jojo
 """
 import os
@@ -81,16 +85,26 @@ def prepare_all_datasets():
     # Get the extended tokenizer
     tokenizer = get_extended_tokenizer()
     
+    # Check if we need to generate the knowledge dataset
+    if not os.path.exists("data/knowledge-train.txt") or not os.path.exists("data/knowledge-val.txt"):
+        ensure_knowledge_dataset_exists()
+    
+    # Check if we need to generate the dictionary dataset
+    if not os.path.exists("data/dictionary-train.txt") or not os.path.exists("data/dictionary-val.txt"):
+        ensure_dictionary_dataset_exists()
+    
     # List of dataset paths to process (input text files and output binary files)
     datasets = [
         ("data/chat-train.txt", "data/chat-train.bin"),
         ("data/chat-val.txt", "data/chat-val.bin"),
         ("data/chitchat-train.txt", "data/chitchat-train.bin"),
         ("data/chitchat-val.txt", "data/chitchat-val.bin"),
-        ("data/dailydialog-train.txt", "data/dailydialog-train.bin"),
-        ("data/dailydialog-val.txt", "data/dailydialog-val.bin"),
         ("data/story-train.bin", "data/story-train.bin"),  # Already processed
         ("data/story-val.bin", "data/story-val.bin"),      # Already processed
+        ("data/knowledge-train.txt", "data/knowledge-train.bin"),
+        ("data/knowledge-val.txt", "data/knowledge-val.bin"),
+        ("data/dictionary-train.txt", "data/dictionary-train.bin"),
+        ("data/dictionary-val.txt", "data/dictionary-val.bin"),
     ]
     
     # Process each dataset
@@ -119,10 +133,12 @@ def process_specific_dataset(dataset_name):
                 ("data/chat-val.txt", "data/chat-val.bin")],
         "chitchat": [("data/chitchat-train.txt", "data/chitchat-train.bin"), 
                     ("data/chitchat-val.txt", "data/chitchat-val.bin")],
-        "dailydialog": [("data/dailydialog-train.txt", "data/dailydialog-train.bin"), 
-                       ("data/dailydialog-val.txt", "data/dailydialog-val.bin")],
         "story": [("data/story-train.bin", "data/story-train.bin"), 
-                 ("data/story-val.bin", "data/story-val.bin")]
+                 ("data/story-val.bin", "data/story-val.bin")],
+        "knowledge": [("data/knowledge-train.txt", "data/knowledge-train.bin"),
+                     ("data/knowledge-val.txt", "data/knowledge-val.bin")],
+        "dictionary": [("data/dictionary-train.txt", "data/dictionary-train.bin"),
+                      ("data/dictionary-val.txt", "data/dictionary-val.bin")]
     }
     
     # Make sure the dataset name is valid
@@ -130,6 +146,18 @@ def process_specific_dataset(dataset_name):
         print(f"Unknown dataset: {dataset_name}")
         print(f"Available datasets: {', '.join(dataset_paths.keys())}")
         return False
+    
+    # Special handling for knowledge dataset
+    if dataset_name == "knowledge" and not os.path.exists("data/knowledge-train.txt"):
+        if not ensure_knowledge_dataset_exists():
+            print("Failed to generate the knowledge dataset. Please run 'python data/prepare-knowledge.py' manually.")
+            return False
+            
+    # Special handling for dictionary dataset
+    if dataset_name == "dictionary" and not os.path.exists("data/dictionary-train.txt"):
+        if not ensure_dictionary_dataset_exists():
+            print("Failed to generate the dictionary dataset. Please run 'python data/prepare-dictionary.py' manually.")
+            return False
         
     # Process the specified dataset
     for text_file, bin_file in dataset_paths[dataset_name]:
@@ -148,13 +176,83 @@ def process_specific_dataset(dataset_name):
     
     return True
 
+def ensure_knowledge_dataset_exists():
+    """
+    Check if the knowledge dataset exists and generate it if needed.
+    Returns True if the dataset exists or was successfully generated,
+    False otherwise.
+    """
+    train_file = "data/knowledge-train.txt"
+    val_file = "data/knowledge-val.txt"
+    
+    if os.path.exists(train_file) and os.path.exists(val_file):
+        print(f"Knowledge dataset files found.")
+        return True
+    
+    print("Knowledge dataset not found. Running prepare-knowledge.py...")
+    print("\nNOTE: This will generate a basic knowledge Q&A dataset.")
+    print("For more options, run 'python data/prepare-knowledge.py --help'")
+    print("Advanced options include using SQuAD answers directly or using an LLM for reformatting.")
+    
+    # Run the prepare-knowledge.py script with --use_squad_answers to ensure it works without LLM
+    try:
+        import subprocess
+        result = subprocess.run(["python", "data/prepare-knowledge.py", "--use_squad_answers"], 
+                                capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print("Failed to generate knowledge dataset:")
+            print(result.stderr)
+            return False
+        else:
+            print("Knowledge dataset generated successfully!")
+            return True
+    except Exception as e:
+        print(f"An error occurred while generating the knowledge dataset: {e}")
+        return False
+
+def ensure_dictionary_dataset_exists():
+    """
+    Check if the dictionary dataset exists and generate it if needed.
+    Returns True if the dataset exists or was successfully generated,
+    False otherwise.
+    """
+    train_file = "data/dictionary-train.txt"
+    val_file = "data/dictionary-val.txt"
+    
+    if os.path.exists(train_file) and os.path.exists(val_file):
+        print(f"Dictionary dataset files found.")
+        return True
+    
+    print("Dictionary dataset not found. Running prepare-dictionary.py...")
+    print("\nNOTE: This will generate a basic dictionary dataset with word definitions.")
+    print("By default, it will process up to 1000 common English words.")
+    print("For more options, run 'python data/prepare-dictionary.py --help'")
+    
+    # Run the prepare-dictionary.py script
+    try:
+        import subprocess
+        result = subprocess.run(["python", "data/prepare-dictionary.py", "--max_words", "100"], 
+                                capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print("Failed to generate dictionary dataset:")
+            print(result.stderr)
+            return False
+        else:
+            print("Dictionary dataset generated successfully!")
+            return True
+    except Exception as e:
+        print(f"An error occurred while generating the dictionary dataset: {e}")
+        return False
+
 if __name__ == "__main__":
     print("\n=== Jojo Data Preparation with Extended Tokenizer ===\n")
     
     # Parse command line arguments
     import argparse
     parser = argparse.ArgumentParser(description="Prepare datasets using the extended tokenizer")
-    parser.add_argument("--dataset", type=str, help="Process only the specified dataset (options: chat, chitchat, dailydialog, story)")
+    parser.add_argument("--dataset", type=str, help="Process only the specified dataset (options: chat, chitchat, story, knowledge, dictionary)")
     parser.add_argument("--force", action="store_true", help="Skip confirmation prompt and process immediately")
     args = parser.parse_args()
     
@@ -175,6 +273,9 @@ if __name__ == "__main__":
             if response.lower() != 'y':
                 print("\nOperation cancelled.")
                 exit()
+        
+        # Ensure knowledge dataset exists before processing
+        ensure_knowledge_dataset_exists()
         
         prepare_all_datasets()
         print("\nAll datasets processed successfully!")

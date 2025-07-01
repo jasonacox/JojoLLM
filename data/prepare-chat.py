@@ -2,21 +2,11 @@
 """
 Jojo LLM Data Preparation - Chat Template
 
-This script downloads and prepares conversational datasets formatted with a
-Hum        # Download and extract DailyDialog dataset if needed
-        zip_path = os.path.join(data_dir, "dailydialog.zip")
-        download_if_missing(zip_path, DAILYDIALOG_URL)
-        
-        # Check if the dialogues_text.txt file exists in the expected location
-        dialogues_path = os.path.join(dailydialog_path, "ijcnlp_dailydialog", "dialogues_text.txt")
-        if not os.path.exists(dialogues_path):
-            extract_zip(zip_path, dailydialog_path)
-        
-        # Process dialogues
-        try:
-            print("Processing dialogues...")
-            # Path is now properly set to the subdirectoryt chat template suited for training models to engage in
-helpful conversations.
+This script downloads and prepares the DailyDialog dataset, which contains
+high-quality multi-turn dialogues focusing on everyday conversations. It then
+formats the data into a ChatML-style template suitable for training models to
+engage in helpful conversations. The script also cleans up punctuation and
+refines assistant responses to be more polite and helpful.
 
 Author: Jason A. Cox
 2025 June 28
@@ -48,32 +38,29 @@ SPECIAL_TOKENS = {
     "endoftext": "<|endoftext|>"
 }
 
-# Old format constants (kept for reference)
-HUMAN_PREFIX = "Human: "
-ASSISTANT_PREFIX = "Assistant: "
-TURN_SEPARATOR = "\n\n"
-CONVERSATION_SEPARATOR = "\n\n<|endoftext|>\n\n"
+# Separator for conversations in the dataset
+CONVERSATION_SEPARATOR = "\n<|endoftext|>\n\n"
 
 # Helper functions for new format
 def format_user_message(message):
-    """Format a message from the user with special tokens"""
+    """Formats a message from the user with special tokens."""
     return f"{SPECIAL_TOKENS['im_start']}{SPECIAL_TOKENS['user']}\n{message.strip()}\n{SPECIAL_TOKENS['im_end']}"
 
 def format_assistant_message(message):
-    """Format a message from the assistant with special tokens"""
+    """Formats a message from the assistant with special tokens."""
     return f"{SPECIAL_TOKENS['im_start']}{SPECIAL_TOKENS['assistant']}\n{message.strip()}\n{SPECIAL_TOKENS['im_end']}"
 
 def format_system_message(message):
-    """Format a system message with special tokens"""
+    """Formats a system message with special tokens."""
     return f"{SPECIAL_TOKENS['im_start']}{SPECIAL_TOKENS['system']}\n{message.strip()}\n{SPECIAL_TOKENS['im_end']}"
 
 def ensure_dir(directory):
-    """Create directory if it doesn't exist"""
+    """Creates a directory if it doesn't exist."""
     if not os.path.exists(directory):
         os.makedirs(directory)
 
 def download_if_missing(file_path, url):
-    """Download a file if it doesn't exist"""
+    """Downloads a file from a URL if it doesn't exist."""
     if os.path.exists(file_path):
         print(f"File already exists: {file_path}")
         return
@@ -92,14 +79,14 @@ def download_if_missing(file_path, url):
     print(f"Downloaded {file_path}.")
 
 def extract_zip(zip_path, extract_to):
-    """Extract a zip file"""
+    """Extracts a zip file to a specified directory."""
     print(f"Extracting {zip_path} to {extract_to}...")
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(extract_to)
     print("Extraction complete.")
 
 def process_dailydialog(dialogue_path):
-    """Process the dialogues from the DailyDialog dataset"""
+    """Processes dialogues from the DailyDialog dataset."""
     dialogues = []
     
     with open(dialogue_path, 'r', encoding='utf-8') as f:
@@ -109,7 +96,7 @@ def process_dailydialog(dialogue_path):
     return dialogues
 
 def format_chat_template(dialogues):
-    """Format dialogues using the new special token chat template"""
+    """Formats dialogues using the special token chat template."""
     formatted_data = []
     
     for dialogue in tqdm(dialogues, desc="Formatting dialogues", ncols=80):
@@ -141,7 +128,7 @@ def format_chat_template(dialogues):
     return formatted_data
 
 def refine_assistant_response(text):
-    """Make the assistant responses more consistent with helpful AI behavior"""
+    """Refines assistant responses to be more helpful and polite."""
     # Remove any confrontational language
     text = re.sub(r'\b(I disagree|No, that\'s wrong|You\'re wrong|I don\'t want to)\b', 
                   "I understand your perspective", text)
@@ -157,7 +144,7 @@ def refine_assistant_response(text):
     return text
 
 def fix_punctuation_spacing(text):
-    """Fix the odd spacing around punctuation in the DailyDialog dataset"""
+    """Fixes spacing and punctuation issues in the DailyDialog dataset."""
     # Remove __eou__ markers if any remain
     text = text.replace('__eou__', '')
     
@@ -203,7 +190,7 @@ def fix_punctuation_spacing(text):
     return text
 
 def parse_args():
-    """Parse command line arguments"""
+    """Parses command line arguments."""
     parser = argparse.ArgumentParser(description='Prepare conversational dataset with Human-Assistant chat template')
     parser.add_argument('--source', type=str, default='dailydialog',
                         choices=['dailydialog'], 
@@ -211,6 +198,7 @@ def parse_args():
     return parser.parse_args()
 
 def main():
+    """Main function to prepare the chat dataset."""
     print("\n=== Jojo LLM Chat Template Data Preparation ===\n")
     
     args = parse_args()

@@ -36,12 +36,7 @@ SPECIAL_TOKENS = {
     "system": "system",
     "endoftext": "<|endoftext|>"
 }
-
-# Old format constants (kept for reference)
-HUMAN_PREFIX = "Human: "
-ASSISTANT_PREFIX = "Assistant: "
-TURN_SEPARATOR = "\n\n"
-CONVERSATION_SEPARATOR = "\n\n<|endoftext|>\n\n"
+CONVERSATION_SEPARATOR = "\n<|endoftext|>\n\n"
 
 # Helper functions for new format
 def format_user_message(message):

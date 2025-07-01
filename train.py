@@ -36,7 +36,8 @@ UNDERLINE = "\033[4m"
 # Define command line arguments
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a GPT model on various datasets')
-    parser.add_argument('--dataset', type=str, default='story', choices=['story', 'dailydialog', 'chat', 'chitchat'],
+    parser.add_argument('--dataset', type=str, default='story', 
+                        choices=['story', 'dailydialog', 'chat', 'chitchat', 'knowledge', 'dictionary'],
                         help='Dataset to use for training (default: story)')
     parser.add_argument('--max_iters', type=int, default=100, 
                         help='Total number of training iterations (default: 5000)')
@@ -127,6 +128,12 @@ elif args.dataset == 'chat':
 elif args.dataset == 'chitchat':
     dataset_name = 'chitchat'
     print("Using diverse chitchat dataset with name personalization.")
+elif args.dataset == 'knowledge':
+    dataset_name = 'knowledge'
+    print("Using general knowledge Q&A dataset.")
+elif args.dataset == 'dictionary':
+    dataset_name = 'dictionary'
+    print("Using dictionary dataset with word definitions.")
 else:
     print(f"Unknown dataset: {args.dataset}")
     sys.exit(1)
@@ -635,9 +642,9 @@ try:
         # Add a colorful header for the first epoch
         print(f"\n{BOLD}Starting training in epoch mode: {max_epochs} epochs, {len(train_loader)} batches per epoch{ENDC}\n")
     
-        print(f"\n{BOLD}{BLUE}╔══════════════════════════════════════════╗{ENDC}")
+        print(f"{BOLD}{BLUE}╔══════════════════════════════════════════╗{ENDC}")
         print(f"{BOLD}{BLUE}║{padding}{epoch_text}{right_padding}║{ENDC}")
-        print(f"{BOLD}{BLUE}╚══════════════════════════════════════════╝{ENDC}")     
+        print(f"{BOLD}{BLUE}╚══════════════════════════════════════════╝{ENDC}\n")     
 
         # Show total iterations that will be performed
         max_iters = max_epochs * len(train_loader)
@@ -716,7 +723,7 @@ try:
                     # Add a colorful header for the new epoch
                     print(f"\n{BOLD}{BLUE}╔══════════════════════════════════════════╗{ENDC}")
                     print(f"{BOLD}{BLUE}║{padding}{epoch_text}{right_padding}║{ENDC}")
-                    print(f"{BOLD}{BLUE}╚══════════════════════════════════════════╝{ENDC}")
+                    print(f"{BOLD}{BLUE}╚══════════════════════════════════════════╝{ENDC}\n")
                 
                 # Get batch from train_loader using iterator protocol
                 if epoch_iter == 0:

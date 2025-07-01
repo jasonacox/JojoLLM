@@ -11,43 +11,6 @@ This project aims to build a large language model (LLM) from scratch, inspired b
 - Incrementally add more diverse and educational data.
 - Grow the model’s capabilities for language understanding and interaction.
 
-## File Overview
-
-- `data/prepare-story.py`: Prepare the TinyStories dataset for training (download, tokenize and convert to binary format).
-- `data/prepare-chat.py`, `data/prepare-chitchat.py`, `data/prepare-dailydialog.py`: Prepare conversational datasets with ChatML formatting.
-- `train.py`: Create the model from scratch and train it on the dataset.
-- `model.py`: Defines the layers of the GPT model used in this project.
-- `gen.py`: Generate output from the model based on an input.
-- `setup_tokenizer.py`: Provides the extended tokenizer with special token support.
-- `prepare.py`: Re-processes datasets using the extended tokenizer.
-- `tokenizer_demo.py`: Demonstrates how to use the extended tokenizer.
-- `test_extended_tokenizer.py`: Tests the extended tokenizer functionality.
-
-## Project Structure
-
-### Core Files
-- `gen.py`: Generate output from the model based on input prompts, including interactive chat mode
-- `model.py`: Defines the layers of the GPT model used in this project
-- `train.py`: Create and train the model from scratch
-- `setup_tokenizer.py`: Implementation of the extended tokenizer with special token support
-- `prepare.py`: Utility to process datasets using the extended tokenizer
-- `tokenizer_demo.py`: Demonstrates how to use the extended tokenizer
-
-### Data Preparation
-- `data/prepare-story.py`: Prepares the TinyStories dataset
-- `data/prepare-chat.py`: Prepares chat-formatted conversations
-- `data/prepare-chitchat.py`: Prepares simple chitchat conversations
-- `data/prepare-dailydialog.py`: Prepares the DailyDialog dataset
-
-### Testing and Development
-- `test_extended_tokenizer.py`: Test suite for the extended tokenizer
-- `testing_tools/`: Directory containing additional testing and development utilities
-  - `check_special_tokens.py`: Tests special token handling
-  - `compare_tokenizers.py`: Compares different tokenizer behaviors
-  - `extended_tokenizer.py`: Initial wrapper approach (historical)
-  - `quick_test.py`: Simple debugging script
-  - `test_apostrophes.py`: Tests apostrophe handling in text
-
 ## Setup
 
 1. **Create a Python virtual environment:**
@@ -62,10 +25,24 @@ This project aims to build a large language model (LLM) from scratch, inspired b
    ```
 
 3. **Prepare your dataset:**
-   Run the following command to download, tokenize and prepare the TinyStories dataset for training:
+   Run the following command to tokenize and prepare all datasets for training using the extended tokenizer:
    ```bash
-   python data/prepare-story.py
+   python prepare.py
    ```
+   
+   You can also process a specific dataset (e.g., chat, chitchat, or story):
+   ```bash
+   python prepare.py --dataset chat
+   ```
+   
+   Available datasets:
+   - `chat`: Human-Assistant formatted conversations for assistant-like interactions
+   - `chitchat`: Simple greetings and short exchanges for basic interactions
+   - `story`: The TinyStories dataset for simple stories
+   - `knowledge`: General knowledge Q&A pairs for factual responses
+   - `dictionary`: Word definitions for vocabulary and language understanding
+   
+   This will process all relevant .txt files in the data/ directory and create corresponding .bin files for efficient training.
 
 4. **Train the model:**
    Run the training script. If you have a CUDA-capable GPU, you will be prompted to select which GPU to use.
@@ -79,7 +56,11 @@ This project aims to build a large language model (LLM) from scratch, inspired b
      - `dailydialog`: The DailyDialog dataset for conversational training
      - `chat`: Human-Assistant formatted conversations for assistant-like interactions
      - `chitchat`: Simple greetings and short exchanges for basic social interactions
+     - `knowledge`: General knowledge Q&A pairs for factual responses
+     - `dictionary`: Word definitions for vocabulary and language understanding
    - `--max_iters`: Set the total number of training iterations (default: 5000)
+   - `--epochs`: Number of epochs to train for (overrides max_iters if specified)
+   - `--epoch_mode`: Use epoch-based training instead of iteration-based training. This ensures the full dataset is used for each epoch, providing more thorough coverage of your data.
    - `--seed`: Set random seed for reproducibility (default: 1337)
    - `--eval_interval`: How often to run evaluation (default: 500)
    - `--log_interval`: How often to log training progress (default: 10)
@@ -102,6 +83,9 @@ This project aims to build a large language model (LLM) from scratch, inspired b
    # Train for more iterations
    python train.py --max_iters 10000
    
+   # Train for a specific number of epochs (epoch-based training)
+   python train.py --dataset chat --epochs 5 --epoch_mode
+   
    # Continue training from a checkpoint with a different dataset
    python train.py --checkpoint models/story5000.pt --dataset chat
    
@@ -114,7 +98,10 @@ This project aims to build a large language model (LLM) from scratch, inspired b
    
    - The script will display all available CUDA devices and their memory.
    - Enter the device number you wish to use when prompted.
-   - When using an existing checkpoint, the script will check if it has already been trained beyond the requested max_iters and provide options.
+   - When using an existing checkpoint, the script will check if it has already been trained beyond the requested max_iters or epochs and provide options.
+   - The script supports both iteration-based and epoch-based training modes. **Epoch-based training ensures the full dataset is used for each epoch, providing more thorough and consistent coverage of your data.**
+   - Checkpoints are saved automatically during training at regular intervals and on interruption or error.
+   - The script provides robust checkpoint handling and safe file operations to prevent checkpoint corruption.
 
 5. **Generate text:**
    After training, you can generate text using your trained model:
@@ -188,6 +175,45 @@ For more information on implementation details, see the `setup_tokenizer.py` and
 `tokenizer_demo.py` files.
 
 <img width="569" alt="image" src="https://github.com/user-attachments/assets/30891367-de3a-4244-a1a2-80c4a899e949" />
+
+
+## File Overview
+
+- `data/prepare-story.py`: Prepare the TinyStories dataset for training (download, tokenize and convert to binary format).
+- `data/prepare-chat.py`, `data/prepare-chitchat.py`: Prepare conversational datasets with ChatML formatting.
+- `data/prepare-knowledge.py`: Prepares a general knowledge Q&A dataset using SQuAD and optionally a local LLM for answer generation or reformatting.
+- `train.py`: Create the model from scratch and train it on the dataset.
+- `model.py`: Defines the layers of the GPT model used in this project.
+- `gen.py`: Generate output from the model based on an input.
+- `setup_tokenizer.py`: Provides the extended tokenizer with special token support.
+- `prepare.py`: Re-processes datasets using the extended tokenizer.
+- `tokenizer_demo.py`: Demonstrates how to use the extended tokenizer.
+- `test_extended_tokenizer.py`: Tests the extended tokenizer functionality.
+
+## Project Structure
+
+### Core Files
+- `gen.py`: Generate output from the model based on input prompts, including interactive chat mode
+- `model.py`: Defines the layers of the GPT model used in this project
+- `train.py`: Create and train the model from scratch
+- `setup_tokenizer.py`: Implementation of the extended tokenizer with special token support
+- `prepare.py`: Utility to process datasets using the extended tokenizer
+- `tokenizer_demo.py`: Demonstrates how to use the extended tokenizer
+
+### Data Preparation
+- `data/prepare-story.py`: Prepares the TinyStories dataset
+- `data/prepare-chat.py`: Prepares chat-formatted conversations
+- `data/prepare-chitchat.py`: Prepares simple chitchat conversations
+- `data/prepare-knowledge.py`: Prepares a general knowledge Q&A dataset using SQuAD and optionally a local LLM
+
+### Testing and Development
+- `testing_tools/`: Directory containing additional testing and development utilities
+- `test_extended_tokenizer.py`: Test suite for the extended tokenizer
+  - `check_special_tokens.py`: Tests special token handling
+  - `compare_tokenizers.py`: Compares different tokenizer behaviors
+  - `extended_tokenizer.py`: Initial wrapper approach (historical)
+  - `quick_test.py`: Simple debugging script
+  - `test_apostrophes.py`: Tests apostrophe handling in text
 
 ## Notes
 
