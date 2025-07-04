@@ -181,7 +181,7 @@ For more information on implementation details, see the `setup_tokenizer.py` and
 
 - `data/prepare-story.py`: Prepare the TinyStories dataset for training (download, tokenize and convert to binary format).
 - `data/prepare-chat.py`, `data/prepare-chitchat.py`: Prepare conversational datasets with ChatML formatting.
-- `data/prepare-knowledge.py`: Prepares a general knowledge Q&A dataset using SQuAD and optionally a local LLM for answer generation or reformatting.
+- `data/prepare-knowledge.py`: Prepares a general knowledge Q&A dataset using SQuAD and optionally a local LLM for answer generation or reformatting, with robust retry capability.
 - `train.py`: Create the model from scratch and train it on the dataset.
 - `model.py`: Defines the layers of the GPT model used in this project.
 - `gen.py`: Generate output from the model based on an input.
@@ -204,7 +204,7 @@ For more information on implementation details, see the `setup_tokenizer.py` and
 - `data/prepare-story.py`: Prepares the TinyStories dataset
 - `data/prepare-chat.py`: Prepares chat-formatted conversations
 - `data/prepare-chitchat.py`: Prepares simple chitchat conversations
-- `data/prepare-knowledge.py`: Prepares a general knowledge Q&A dataset using SQuAD and optionally a local LLM
+- `data/prepare-knowledge.py`: Prepares a general knowledge Q&A dataset using SQuAD and optionally a local LLM with robust retry capability
 
 ### Testing and Development
 - `testing_tools/`: Directory containing additional testing and development utilities

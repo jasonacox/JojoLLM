@@ -126,16 +126,20 @@ This script generates a general knowledge Q&A dataset using the SQuAD dataset an
 Usage:
 ```bash
 cd /home/jason/code/jojo
-python data/prepare-knowledge.py [--use_squad_answers] [--model MODEL] [--reset] [other options]
+python data/prepare-knowledge.py [--use_squad_answers] [--model MODEL] [--llm_api_url URL] [--llm_api_key KEY] [--temperature TEMP] [--reset] [--append] [--max_questions N] [--retry_delay N] [--verbose]
 ```
 
 Options:
 - `--use_squad_answers`  Use answers from the SQuAD dataset instead of generating with the LLM. If used with `--model`, the LLM will reformat the SQuAD answer into a well-punctuated, complete sentence.
-- `--model MODEL`        Specify the LLM model to use (e.g., gpt-3.5-turbo). Required for LLM-based answer generation or reformatting.
+- `--model MODEL`        Specify the LLM model to use (e.g., gpt-3.5-turbo). If not provided, SQuAD answers will be used directly (equivalent to --use_squad_answers).
+- `--llm_api_url URL`    URL of the LLM API endpoint (default: http://localhost:8000/v1/chat/completions). The URL will be automatically formatted to include http:// if missing and ensure it ends with /v1/chat/completions.
+- `--llm_api_key KEY`    API key for the LLM (default: 3-laws-safe).
+- `--temperature TEMP`   Temperature for LLM generation (default: 0.7).
 - `--reset`              Delete all output and checkpoint files before starting (fresh run).
 - `--append`             Reset checkpoint but append to existing output files (useful for adding more data).
 - `--max_questions N`    Limit the number of questions processed.
 - `--verbose`            Enable verbose output for step-by-step details.
+- `--retry_delay N`      Seconds to wait between retry attempts when LLM is unavailable (default: 10).
 
 The script will:
 1. Download the SQuAD dataset if it doesn't exist
@@ -148,21 +152,32 @@ The script will:
 6. Tokenize the text using the GPT-2 tokenizer (with ChatML special tokens)
 7. Save the tokenized data as binary files for efficient loading
 8. Support `Ctrl+C` interruption and checkpointing for robust, resumable runs
+9. When using a model, automatically retry LLM API calls indefinitely if the server is unavailable (with customizable delay via `--retry_delay`)
 9. Automatically delete checkpoint file upon successful completion
 
 ### prepare-dictionary.py
-This script generates a dictionary dataset with word definitions by using a free dictionary API to look up word meanings, examples, and synonyms.
+This script generates a dictionary dataset with word definitions by using either a free dictionary API or an LLM to look up word meanings, examples, and synonyms.
 
 Usage:
 ```bash
 cd /home/jason/code/jojo
-python data/prepare-dictionary.py [--max_words N] [--reset] [other options]
+python data/prepare-dictionary.py [--max_words N] [--reset] [--model MODEL] [other options]
 ```
 
 Options:
 - `--max_words N`        Maximum number of words to process (default: 1000).
 - `--min_word_length N`  Minimum word length to consider (default: 4).
 - `--max_word_length N`  Maximum word length to consider (default: 12).
+- `--verbose`            Enable verbose output for step-by-step details.
+- `--reset`              Delete all output and checkpoint files to start over.
+- `--sleep N`            Sleep time in seconds between API calls to avoid rate limiting (default: 0.5).
+
+LLM-related options:
+- `--model MODEL`        Specify LLM model for generating definitions. If provided, will use an LLM instead of the dictionary API.
+- `--llm_api_url URL`    URL of the LLM API endpoint (default: http://localhost:8000/v1/chat/completions).
+- `--llm_api_key KEY`    API key for the LLM (default: 3-laws-safe).
+- `--temperature TEMP`   Temperature for LLM generation (default: 0.7).
+- `--retry_delay N`      Seconds to wait between retry attempts when LLM is unavailable (default: 10).
 - `--reset`              Delete all output and checkpoint files before starting (fresh run).
 - `--verbose`            Enable verbose output for step-by-step details.
 - `--sleep N`            Sleep time in seconds between API calls to avoid rate limiting (default: 0.5).

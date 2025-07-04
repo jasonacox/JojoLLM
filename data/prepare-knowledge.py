@@ -11,15 +11,24 @@ Usage:
 
 Options:
     --use_squad_answers   Use answers from SQuAD dataset instead of querying LLM
+                          (automatically enabled if --model is not specified)
     --model MODEL         Specify LLM model for answer generation or reformatting
+                          (if not provided, SQuAD answers will be used directly)
+    --llm_api_url URL     URL of the LLM API endpoint (will be automatically formatted,
+                          default: http://localhost:8000/v1/chat/completions)
+    --llm_api_key KEY     API key for the LLM (default: 3-laws-safe)
+    --temperature TEMP    Temperature for LLM generation (default: 0.7)
     --reset               Delete all output and checkpoint files to start over
     --append              Reset checkpoint but append to existing output files
     --max_questions N     Limit the number of questions processed
     --verbose             Enable detailed output for troubleshooting
+    --retry_delay N       Seconds to wait between retry attempts when LLM is unavailable (default: 10)
     
 Notes:
     - The script automatically deletes the checkpoint file upon successful completion
     - Checkpoint file is only preserved if the process is interrupted or fails
+    - When a model is specified and LLM is unavailable, the script will retry indefinitely
+      until the LLM is available again
 
 Author: Jason A. Cox
 2025 June 30
@@ -33,10 +42,12 @@ from tqdm import tqdm
 import requests
 import json
 import argparse
+import time
 
 # Constants
 SQUAD_URL = "https://rajpurkar.github.io/SQuAD-explorer/dataset/train-v2.0.json"
-LLM_API_URL = "http://10.0.1.25:8000/v1/chat/completions"
+LLM_API_URL = "http://localhost:8000/v1/chat/completions"
+DEFAULT_RETRY_DELAY = 10  # Default retry delay in seconds
 
 # Special tokens for chat format
 SPECIAL_TOKENS = {
@@ -62,6 +73,54 @@ def ensure_dir(directory):
     """Creates a directory if it doesn't exist."""
     if not os.path.exists(directory):
         os.makedirs(directory)
+
+def format_llm_api_url(url):
+    """Ensures the LLM API URL is properly formatted with scheme and correct endpoint path.
+    
+    This function ensures that the URL:
+    1. Has a proper scheme (http:// or https://)
+    2. Ends with the correct API endpoint path (/v1/chat/completions)
+    
+    Args:
+        url: The URL to format (e.g., "localhost:8000", "api.example.com/v1")
+        
+    Returns:
+        A properly formatted URL that starts with http/https and ends with /v1/chat/completions
+        
+    Examples:
+        >>> format_llm_api_url("localhost:8000")
+        "http://localhost:8000/v1/chat/completions"
+        
+        >>> format_llm_api_url("api.example.com/v1")
+        "http://api.example.com/v1/chat/completions"
+        
+        >>> format_llm_api_url("https://openai.com")
+        "https://openai.com/v1/chat/completions"
+    """
+    # Add http:// if no scheme is present
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = f"http://{url}"
+    
+    # Make sure the URL ends with /v1/chat/completions
+    if not url.endswith("/v1/chat/completions"):
+        # Remove trailing slash if present
+        if url.endswith("/"):
+            url = url[:-1]
+        
+        # Check if URL already contains part of the endpoint
+        if "/v1/chat" in url:
+            # Extract base path up to /v1/chat
+            base_path = url.split("/v1/chat")[0]
+            url = f"{base_path}/v1/chat/completions"
+        elif "/v1" in url:
+            # Extract base path up to /v1
+            base_path = url.split("/v1")[0]
+            url = f"{base_path}/v1/chat/completions"
+        else:
+            # Just append the full endpoint path
+            url = f"{url}/v1/chat/completions"
+    
+    return url
 
 def download_if_missing(file_path, url):
     """Downloads a file from a URL if it doesn't exist."""
@@ -97,8 +156,22 @@ def extract_qa_from_squad(squad_file, verbose=False):
         print(f"- Found {len(qa_pairs)} question-answer pairs. Example: '{qa_pairs[0]['question']}' -> '{qa_pairs[0]['answer']}'")
     return qa_pairs
 
-def query_llm(question, api_url, api_key, model, temperature, verbose=False, squad_answer=None):
-    """Queries the LLM to get an answer for a given question, or to reformat a SQuAD answer if provided."""
+def query_llm(question, api_url, api_key, model, temperature, verbose=False, squad_answer=None, max_retries=None, retry_delay=10):
+    """Queries the LLM to get an answer for a given question, or to reformat a SQuAD answer if provided.
+    
+    Args:
+        question: The question to ask the LLM
+        api_url: URL of the LLM API
+        api_key: API key for authentication
+        model: LLM model to use
+        temperature: Temperature parameter for generation
+        verbose: Whether to print verbose logs
+        squad_answer: If provided, reformat this answer instead of generating one
+        max_retries: Maximum number of retries (None for infinite retries)
+        retry_delay: Delay in seconds between retries
+    """
+    # Ensure the API URL is properly formatted
+    api_url = format_llm_api_url(api_url)
     if squad_answer is not None:
         # Prompt the LLM to reformat the SQuAD answer into a complete, well-punctuated sentence
         prompt = (
@@ -122,30 +195,52 @@ def query_llm(question, api_url, api_key, model, temperature, verbose=False, squ
         ],
         "temperature": temperature
     }
-    try:
-        # Add a timeout to avoid hanging if the server is not responding
-        response = requests.post(api_url, headers=headers, json=data, timeout=10)
-        response.raise_for_status()
-        answer = response.json()['choices'][0]['message']['content']
-        if verbose:
-            print(f"  - Received answer: \"{answer[:50]}...\"")
-        return answer.strip()
-    except requests.exceptions.ConnectionError:
-        # Connection error likely means the LLM server isn't available
-        raise Exception("Could not connect to LLM API server. Please ensure the server is running.")
-    except requests.exceptions.Timeout:
-        raise Exception("LLM API request timed out. The server might be overloaded.")
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            raise Exception(f"LLM API endpoint not found at {api_url}. Please check the URL.")
-        else:
-            raise Exception(f"HTTP error from LLM API: {e}")
-    except requests.exceptions.RequestException as e:
-        print(f"Error querying LLM: {e}")
-        return None
-    except Exception as e:
-        print(f"Unexpected error when querying LLM: {e}")
-        return None
+    
+    retries = 0
+    while max_retries is None or retries <= max_retries:
+        try:
+            # Add a timeout to avoid hanging if the server is not responding
+            response = requests.post(api_url, headers=headers, json=data, timeout=10)
+            response.raise_for_status()
+            answer = response.json()['choices'][0]['message']['content']
+            if verbose:
+                print(f"  - Received answer: \"{answer[:50]}...\"")
+            return answer.strip()
+        except (requests.exceptions.ConnectionError, 
+                requests.exceptions.Timeout, 
+                requests.exceptions.HTTPError) as e:
+            
+            error_type = type(e).__name__
+            error_message = str(e)
+            
+            if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 404:
+                error_detail = f"LLM API endpoint not found at {api_url}. Please check the URL."
+            elif isinstance(e, requests.exceptions.ConnectionError):
+                error_detail = "Could not connect to LLM API server. Please ensure the server is running."
+            elif isinstance(e, requests.exceptions.Timeout):
+                error_detail = "LLM API request timed out. The server might be overloaded."
+            else:
+                error_detail = f"HTTP error from LLM API: {e}"
+            
+            retries += 1
+            if max_retries is not None and retries > max_retries:
+                raise Exception(f"Maximum retries ({max_retries}) exceeded. Last error: {error_detail}")
+            
+            print(f"\nWarning: {error_detail}")
+            print(f"Retrying in {retry_delay} seconds... (attempt {retries}{' of ' + str(max_retries) if max_retries else ''})")
+            
+            import time
+            time.sleep(retry_delay)
+            
+            # Let the user know we're trying again
+            print(f"Retrying LLM query for: \"{user_message[:50]}...\"")
+        
+        except requests.exceptions.RequestException as e:
+            print(f"Unrecoverable error querying LLM: {e}")
+            return None
+        except Exception as e:
+            print(f"Unexpected error when querying LLM: {e}")
+            return None
 
 # General Knowledge Q&A Pairs (fallback)
 KNOWLEDGE_DATA = [
@@ -174,16 +269,23 @@ KNOWLEDGE_DATA = [
 def parse_args():
     """Parses command line arguments."""
     parser = argparse.ArgumentParser(description='Prepare general knowledge dataset using SQuAD and an LLM.')
-    parser.add_argument('--llm_api_url', type=str, default=LLM_API_URL, help='URL of the LLM API endpoint.')
-    parser.add_argument('--api_key', type=str, default='3-laws-safe', help='API key for the LLM.')
-    parser.add_argument('--model', type=str, default='gpt-3.5-turbo', help='Model name for the LLM.')
+    parser.add_argument('--llm_api_url', type=str, default=LLM_API_URL, 
+                    help='URL of the LLM API endpoint. Will be automatically formatted to include http:// and /v1/chat/completions if needed.')
+    parser.add_argument('--llm_api_key', type=str, default='3-laws-safe', help='API key for the LLM.')
+    parser.add_argument('--model', type=str, default=None, help='Model name for the LLM. If not provided, SQuAD answers will be used directly.')
     parser.add_argument('--temperature', type=float, default=0.7, help='Temperature for LLM generation.')
     parser.add_argument('--max_questions', type=int, default=None, help='Maximum number of questions to process from SQuAD.')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output for step-by-step details.')
     parser.add_argument('--use_squad_answers', action='store_true', help='Use answers from SQuAD dataset instead of querying LLM.')
     parser.add_argument('--reset', action='store_true', help='Delete all output and checkpoint files to start over.')
     parser.add_argument('--append', action='store_true', help='Reset checkpoint but append to existing output files instead of overwriting them.')
-    return parser.parse_args()
+    parser.add_argument('--retry_delay', type=int, default=DEFAULT_RETRY_DELAY, help='Delay in seconds between retry attempts when LLM is unavailable.')
+    
+    args = parser.parse_args()
+    # Format the LLM API URL to ensure it's properly formatted
+    if args.llm_api_url:
+        args.llm_api_url = format_llm_api_url(args.llm_api_url)
+    return args
 
 def main():
     """Main function to prepare the knowledge dataset."""
@@ -246,43 +348,59 @@ def main():
     else:
         print(f"\nProcessing {len(qa_to_process)} new Q&A pairs (from index {start_index})...")
         
+        # If no model is provided, automatically set use_squad_answers to True
+        if not args.model and not args.use_squad_answers:
+            print("\nNote: No model specified, automatically using SQuAD answers directly.")
+            args.use_squad_answers = True
+        
         generated_count = 0
-        llm_available = True  # Flag to track LLM availability
         
         # Open files in append mode to continue where we left off
         try:
-            with open(train_file, 'a', encoding='utf-8') as f_train, \
-                 open(val_file, 'a', encoding='utf-8') as f_val:
+            with open(train_file, 'a' if os.path.exists(train_file) and not args.reset else 'w', encoding='utf-8') as f_train, \
+                 open(val_file, 'a' if os.path.exists(val_file) and not args.reset else 'w', encoding='utf-8') as f_val:
                 for i, qa_pair in enumerate(tqdm(qa_to_process, desc="Generating Q&A pairs", ncols=80)):
                     current_index = start_index + i
                     question = qa_pair['question']
-                    squad_answer = qa_pair['answer'] if args.use_squad_answers else None
+                    squad_answer = qa_pair['answer']
 
-                    # If we've already found that the LLM is not available and we need it,
-                    # skip to using the squad answer directly or use a placeholder
-                    if not llm_available and (not args.use_squad_answers or (args.use_squad_answers and args.model)):
-                        if args.use_squad_answers:
-                            answer = squad_answer
-                        else:
-                            # Skip this question if we can't get an answer
-                            continue
-                    else:
-                        # Try to get an answer from the LLM if needed
+                    # Handle answer generation/reformatting with retries if model is specified
+                    if args.model:
                         try:
-                            if args.use_squad_answers and args.model:
-                                answer = query_llm(question, args.llm_api_url, args.api_key, args.model, args.temperature, args.verbose, squad_answer=squad_answer)
-                            elif args.use_squad_answers:
-                                answer = squad_answer
-                            else:
-                                answer = query_llm(question, args.llm_api_url, args.api_key, args.model, args.temperature, args.verbose)
-                        except Exception as e:
-                            llm_available = False
-                            print(f"\nError: Could not connect to LLM API. Will use SQuAD answers directly if available.")
                             if args.use_squad_answers:
-                                answer = squad_answer
+                                # Reformat the SQuAD answer using LLM with infinite retries
+                                answer = query_llm(
+                                    question, 
+                                    args.llm_api_url, 
+                                    args.llm_api_key, 
+                                    args.model, 
+                                    args.temperature, 
+                                    args.verbose, 
+                                    squad_answer=squad_answer, 
+                                    max_retries=None,
+                                    retry_delay=args.retry_delay
+                                )
                             else:
-                                # Skip this question if we can't get an answer
-                                continue
+                                # Generate answer using LLM with infinite retries
+                                answer = query_llm(
+                                    question, 
+                                    args.llm_api_url, 
+                                    args.llm_api_key, 
+                                    args.model, 
+                                    args.temperature, 
+                                    args.verbose,
+                                    max_retries=None,
+                                    retry_delay=args.retry_delay
+                                )
+                        except KeyboardInterrupt:
+                            print("\nKeyboard interrupt detected. Saving checkpoint and exiting...")
+                            with open(checkpoint_file, 'w') as ckpt:
+                                ckpt.write(str(current_index))
+                            print(f"Checkpoint saved at index {current_index}")
+                            return
+                    else:
+                        # Use SQuAD answer directly (no model specified or explicit --use_squad_answers)
+                        answer = squad_answer
                     
                     if answer:
                         user_message = format_user_message(question)
@@ -295,8 +413,10 @@ def main():
                             f_val.write(formatted_entry + CONVERSATION_SEPARATOR)
                         generated_count += 1
 
+                        # Save checkpoint after each successful answer
                         with open(checkpoint_file, 'w') as f_checkpoint:
                             f_checkpoint.write(str(current_index + 1))
+            
             print(f"Generated {generated_count} new knowledge conversations.")
         except KeyboardInterrupt:
             print("\nInterrupted by user (Ctrl+C). Progress saved. Exiting gracefully.")

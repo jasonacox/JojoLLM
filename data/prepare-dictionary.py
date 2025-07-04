@@ -3,9 +3,29 @@
 Jojo LLM Data Preparation - Dictionary Dataset
 
 This script generates a dataset of dictionary entries to train the model
-for understanding and defining words. It uses a word list and dictionary API
-to create question-answer pairs in the format "What does [word] mean?" with
+for understanding and defining words. It uses a word list and either a dictionary API
+or an LLM to create question-answer pairs in the format "What does [word] mean?" with
 appropriate definitions as responses.
+
+Usage:
+    python prepare-dictionary.py [options]
+
+Options:
+    --max_words N         Maximum number of words to process (default: 1000)
+    --min_word_length N   Minimum word length to consider (default: 4)
+    --max_word_length N   Maximum word length to consider (default: 12)
+    --verbose             Enable detailed output for troubleshooting
+    --reset               Delete all output and checkpoint files to start over
+    --sleep N             Sleep time in seconds between API calls to avoid rate limiting (default: 0.5)
+    
+    # LLM-related options
+    --model MODEL         Specify LLM model for generating definitions
+                          (if not provided, the dictionary API will be used)
+    --llm_api_url URL     URL of the LLM API endpoint (will be automatically formatted,
+                          default: http://localhost:8000/v1/chat/completions)
+    --llm_api_key KEY     API key for the LLM (default: 3-laws-safe)
+    --temperature TEMP    Temperature for LLM generation (default: 0.7)
+    --retry_delay N       Seconds to wait between retry attempts when LLM is unavailable (default: 10)
 
 Author: Jason A. Cox
 2025 June 30
@@ -20,10 +40,13 @@ import requests
 import json
 import argparse
 import time
+import sys
 
 # Constants
 WORDLIST_URL = "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt"
 DICTIONARY_API_URL = "https://api.dictionaryapi.dev/api/v2/entries/en/"
+LLM_API_URL = "http://localhost:8000/v1/chat/completions"
+DEFAULT_RETRY_DELAY = 10  # Default retry delay in seconds
 
 # Special tokens for chat format
 SPECIAL_TOKENS = {
@@ -50,6 +73,44 @@ def ensure_dir(directory):
     if not os.path.exists(directory):
         os.makedirs(directory)
 
+def format_llm_api_url(url):
+    """Ensures the LLM API URL is properly formatted with scheme and correct endpoint path.
+    
+    This function ensures that the URL:
+    1. Has a proper scheme (http:// or https://)
+    2. Ends with the correct API endpoint path (/v1/chat/completions)
+    
+    Args:
+        url: The URL to format (e.g., "localhost:8000", "api.example.com/v1")
+        
+    Returns:
+        A properly formatted URL that starts with http/https and ends with /v1/chat/completions
+    """
+    # Add http:// if no scheme is present
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = f"http://{url}"
+    
+    # Make sure the URL ends with /v1/chat/completions
+    if not url.endswith("/v1/chat/completions"):
+        # Remove trailing slash if present
+        if url.endswith("/"):
+            url = url[:-1]
+        
+        # Check if URL already contains part of the endpoint
+        if "/v1/chat" in url:
+            # Extract base path up to /v1/chat
+            base_path = url.split("/v1/chat")[0]
+            url = f"{base_path}/v1/chat/completions"
+        elif "/v1" in url:
+            # Extract base path up to /v1
+            base_path = url.split("/v1")[0]
+            url = f"{base_path}/v1/chat/completions"
+        else:
+            # Just append the full endpoint path
+            url = f"{url}/v1/chat/completions"
+    
+    return url
+
 def download_if_missing(file_path, url):
     """Downloads a file from a URL if it doesn't exist."""
     if os.path.exists(file_path):
@@ -70,33 +131,57 @@ def download_if_missing(file_path, url):
             f.write(response.content)
     print(f"Downloaded {file_path}.")
 
-def get_word_definition(word, verbose=False):
-    """Gets the definition of a word from the dictionary API."""
+def get_word_definition(word, verbose=False, use_llm=False, llm_api_url=None, llm_api_key=None, model=None, temperature=0.7, retry_delay=10):
+    """Gets the definition of a word from the dictionary API or an LLM.
+    
+    Args:
+        word: The word to define
+        verbose: Whether to print verbose logs
+        use_llm: Whether to use an LLM for definitions instead of the dictionary API
+        llm_api_url: URL of the LLM API (if use_llm is True)
+        llm_api_key: API key for the LLM (if use_llm is True)
+        model: The LLM model to use (if use_llm is True)
+        temperature: Temperature parameter for LLM generation
+        retry_delay: Delay in seconds between retry attempts when LLM is unavailable
+    """
     if verbose:
         print(f"  - Looking up definition for: {word}")
     
+    # If LLM is requested and all required params are provided, use it, if it doesn't know, add dictionary API data
+    if use_llm and llm_api_url and model:
+        llm_response = query_llm_for_definition(word, llm_api_url, llm_api_key, model, temperature, verbose, retry_delay)
+        if not llm_response.startswith("I don't know"):
+            return llm_response.strip()
+        if verbose:
+            print(f"  - LLM did not know the definition for: {word}")   
+    
+    # Otherwise, use the dictionary API
     try:
         response = requests.get(DICTIONARY_API_URL + word, timeout=5)
         if response.status_code != 200:
             if verbose:
-                print(f"  - Could not find definition for: {word}")
-            return None
+                print(f"  - Could not find definition for: {word} | {response.status_code} {response.reason}")
+            return "I don't know."
         
         data = response.json()
         if not data or not isinstance(data, list) or len(data) == 0:
-            return None
-        
+            if verbose:
+                print(f"  - No data found for: {word}")
+            return "I don't know."
+
         # Extract the definition
         word_data = data[0]
         if "meanings" not in word_data or len(word_data["meanings"]) == 0:
-            return None
-        
+            if verbose:
+                print(f"  - No meanings found for: {word}")
+            return "I don't know."
+
         # Create a comprehensive definition with part of speech and examples
         definition_parts = []
         
         # Add phonetics if available
-        if "phonetic" in word_data and word_data["phonetic"]:
-            definition_parts.append(f"Pronunciation: {word_data['phonetic']}")
+        #if "phonetic" in word_data and word_data["phonetic"]:
+        #    definition_parts.append(f"Pronunciation: {word_data['phonetic']}")
         
         # Process each meaning
         for meaning in word_data["meanings"]:
@@ -110,21 +195,21 @@ def get_word_definition(word, verbose=False):
                     definition_parts.append(f"{part_of_speech.capitalize()}: {main_def}")
                 
                 # Add an example if available
-                example = definitions[0].get("example", "")
-                if example:
-                    definition_parts.append(f"Example: \"{example}\"")
+                #example = definitions[0].get("example", "")
+                #if example:
+                #    definition_parts.append(f"Example: \"{example}\"")
         
         # Add synonyms if available
-        synonyms = []
-        for meaning in word_data["meanings"]:
-            for definition in meaning.get("definitions", []):
-                if "synonyms" in definition and definition["synonyms"]:
-                    synonyms.extend(definition["synonyms"][:3])  # Limit to 3 synonyms per definition
+        #synonyms = []
+        #for meaning in word_data["meanings"]:
+        #    for definition in meaning.get("definitions", []):
+        #        if "synonyms" in definition and definition["synonyms"]:
+        #            synonyms.extend(definition["synonyms"][:3])  # Limit to 3 synonyms per definition
         
-        if synonyms:
-            # Get unique synonyms and join the first 5
-            unique_synonyms = list(set(synonyms))[:5]
-            definition_parts.append(f"Synonyms: {', '.join(unique_synonyms)}")
+        #if synonyms:
+        #    # Get unique synonyms and join the first 5
+        #    unique_synonyms = list(set(synonyms))[:5]
+        #    definition_parts.append(f"Synonyms: {', '.join(unique_synonyms)}")
         
         # Join all parts into a complete definition
         full_definition = "\n".join(definition_parts)
@@ -132,6 +217,19 @@ def get_word_definition(word, verbose=False):
         if verbose:
             print(f"  - Found definition: {full_definition[:50]}...")
         
+        # If LLM requested - prompt using additional context from disctionary API
+        if use_llm and llm_api_url and model:
+            llm_prompt = (
+                f"Dictionary Entry for '{word}: {full_definition}.\n"
+                f"based on the above, please provide a simple 1 sentence definition of the word '{word}'. "
+                "If you don't know, say 'I don't know.'"
+            )
+            llm_response = query_llm_for_definition(
+                word, llm_api_url, llm_api_key, model, temperature, verbose, retry_delay
+            )
+            if llm_response.startswith("I don't know"):
+                return llm_response.strip()
+
         return full_definition
     
     except requests.exceptions.RequestException:
@@ -142,6 +240,83 @@ def get_word_definition(word, verbose=False):
         if verbose:
             print(f"  - Unexpected error for {word}: {str(e)}")
         return None
+
+def query_llm_for_definition(word, api_url, api_key, model, temperature=0.7, verbose=False, retry_delay=10):
+    """Queries the LLM to get a definition for a given word.
+    
+    Args:
+        word: The word to define
+        api_url: URL of the LLM API
+        api_key: API key for authentication
+        model: LLM model to use
+        temperature: Temperature parameter for generation
+        verbose: Whether to print verbose logs
+        retry_delay: Delay in seconds between retries
+    """
+    # Ensure the API URL is properly formatted
+    api_url = format_llm_api_url(api_url)
+    
+    # Create a prompt asking for a dictionary-style definition
+    prompt = (
+        f"Please provide a simple 1 sentence definition of the word '{word}'. If you don't know, say 'I don't know.'"
+    )
+    
+    if verbose:
+        print(f"  - Querying LLM for definition of: \"{word}\"")
+    
+    # Try to connect to the LLM API
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+        
+    data = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant. Be concise."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": temperature
+    }
+    
+    retries = 0
+    while True:  # Infinite retries
+        try:
+            # Add a timeout to avoid hanging if the server is not responding
+            response = requests.post(api_url, headers=headers, json=data, timeout=10)
+            response.raise_for_status()
+            definition = response.json()['choices'][0]['message']['content']
+            if verbose:
+                print(f"  - Received definition: \"{definition[:50]}...\"")
+            return definition.strip()
+        except (requests.exceptions.ConnectionError, 
+                requests.exceptions.Timeout, 
+                requests.exceptions.HTTPError) as e:
+            
+            if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 404:
+                error_detail = f"LLM API endpoint not found at {api_url}. Please check the URL."
+            elif isinstance(e, requests.exceptions.ConnectionError):
+                error_detail = "Could not connect to LLM API server. Please ensure the server is running."
+            elif isinstance(e, requests.exceptions.Timeout):
+                error_detail = "LLM API request timed out. The server might be overloaded."
+            else:
+                error_detail = f"HTTP error from LLM API: {e}"
+            
+            retries += 1
+            
+            print(f"\nWarning: {error_detail}")
+            print(f"Retrying in {retry_delay} seconds... (attempt {retries})")
+            
+            time.sleep(retry_delay)
+            
+            # Let the user know we're trying again
+            print(f"Retrying LLM query for definition of: \"{word}\"")
+        
+        except requests.exceptions.RequestException as e:
+            print(f"Unrecoverable error querying LLM: {e}")
+            return None
+        except Exception as e:
+            print(f"Unexpected error when querying LLM: {e}")
+            return None
 
 # Fallback dictionary entries in case API is unavailable
 DICTIONARY_DATA = [
@@ -180,14 +355,26 @@ def format_dictionary_question(word):
 
 def parse_args():
     """Parses command line arguments."""
-    parser = argparse.ArgumentParser(description='Prepare dictionary dataset using a word list and dictionary API.')
-    parser.add_argument('--max_words', type=int, default=1000, help='Maximum number of words to process (default: 1000).')
-    parser.add_argument('--min_word_length', type=int, default=4, help='Minimum word length to consider (default: 4).')
-    parser.add_argument('--max_word_length', type=int, default=12, help='Maximum word length to consider (default: 12).')
+    parser = argparse.ArgumentParser(description='Prepare dictionary dataset using a word list and dictionary API or LLM.')
+    parser.add_argument('--max_words', type=int, default=380105, help='Maximum number of words to process (default: 380105).')
+    parser.add_argument('--min_word_length', type=int, default=2, help='Minimum word length to consider (default: 2).')
+    parser.add_argument('--max_word_length', type=int, default=120, help='Maximum word length to consider (default: 120).')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output for step-by-step details.')
     parser.add_argument('--reset', action='store_true', help='Delete all output and checkpoint files to start over.')
     parser.add_argument('--sleep', type=float, default=0.5, help='Sleep time in seconds between API calls to avoid rate limiting (default: 0.5).')
-    return parser.parse_args()
+    
+    # LLM-related arguments
+    parser.add_argument('--model', type=str, default=None, help='Model name for the LLM. If provided, will use LLM for definitions instead of dictionary API.')
+    parser.add_argument('--llm_api_url', type=str, default=LLM_API_URL, help='URL of the LLM API endpoint. Will be automatically formatted to include http:// and /v1/chat/completions if needed.')
+    parser.add_argument('--llm_api_key', type=str, default='3-laws-safe', help='API key for the LLM.')
+    parser.add_argument('--temperature', type=float, default=0.7, help='Temperature for LLM generation.')
+    parser.add_argument('--retry_delay', type=int, default=DEFAULT_RETRY_DELAY, help='Delay in seconds between retry attempts when LLM is unavailable.')
+    
+    args = parser.parse_args()
+    # Format the LLM API URL to ensure it's properly formatted
+    if args.llm_api_url:
+        args.llm_api_url = format_llm_api_url(args.llm_api_url)
+    return args
 
 def main():
     """Main function to prepare the dictionary dataset."""
@@ -256,7 +443,11 @@ def main():
     if not words_to_process:
         print("No new words to process.")
     else:
-        print(f"\nProcessing {len(words_to_process)} new words (from index {start_index})...")
+        # Determine if we're using LLM or dictionary API
+        use_llm = args.model is not None
+        source = f"LLM ({args.model})" if use_llm else "dictionary API"
+        
+        print(f"\nProcessing {len(words_to_process)} new words (from index {start_index}) using {source}...")
         
         generated_count = 0
         # Open files in append mode to continue where we left off
@@ -266,11 +457,22 @@ def main():
                 for i, word in enumerate(tqdm(words_to_process, desc="Generating dictionary entries", ncols=80)):
                     current_index = start_index + i
                     
-                    # Get definition from API
-                    definition = get_word_definition(word, args.verbose)
+                    # Get definition from API or LLM based on args
+                    use_llm = args.model is not None
+                    definition = get_word_definition(
+                        word, 
+                        args.verbose, 
+                        use_llm=use_llm,
+                        llm_api_url=args.llm_api_url if use_llm else None,
+                        llm_api_key=args.llm_api_key if use_llm else None,
+                        model=args.model,
+                        temperature=args.temperature,
+                        retry_delay=args.retry_delay
+                    )
                     
-                    # Sleep to avoid rate limiting
-                    time.sleep(args.sleep)
+                    # Sleep to avoid rate limiting (only for dictionary API, not needed for LLM)
+                    if not use_llm:
+                        time.sleep(args.sleep)
                     
                     if definition:
                         # Format the question and answer

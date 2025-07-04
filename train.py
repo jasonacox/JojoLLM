@@ -37,8 +37,7 @@ UNDERLINE = "\033[4m"
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a GPT model on various datasets')
     parser.add_argument('--dataset', type=str, default='story', 
-                        choices=['story', 'dailydialog', 'chat', 'chitchat', 'knowledge', 'dictionary'],
-                        help='Dataset to use for training (default: story)')
+                        help='Dataset name to use for training (default: story)')
     parser.add_argument('--max_iters', type=int, default=100, 
                         help='Total number of training iterations (default: 5000)')
     parser.add_argument('--epochs', type=int, default=None,
@@ -118,25 +117,8 @@ dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16'
 
 # Use the args object we already created earlier
 # Set dataset-specific parameters
-if args.dataset == 'story':
-    dataset_name = 'story'
-elif args.dataset == 'dailydialog':
-    dataset_name = 'dailydialog'
-elif args.dataset == 'chat':
-    dataset_name = 'chat'
-    print("Using Human-Assistant chat template dataset.")
-elif args.dataset == 'chitchat':
-    dataset_name = 'chitchat'
-    print("Using diverse chitchat dataset with name personalization.")
-elif args.dataset == 'knowledge':
-    dataset_name = 'knowledge'
-    print("Using general knowledge Q&A dataset.")
-elif args.dataset == 'dictionary':
-    dataset_name = 'dictionary'
-    print("Using dictionary dataset with word definitions.")
-else:
-    print(f"Unknown dataset: {args.dataset}")
-    sys.exit(1)
+dataset_name = args.dataset
+print(f"Using dataset: {dataset_name}")
 
 # Set the target max iterations
 max_iters = args.max_iters
