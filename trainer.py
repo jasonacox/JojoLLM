@@ -18,10 +18,19 @@ from typing import Optional, Dict, Any, Tuple
 import torch
 import torch.nn as nn
 
+# Try to import matplotlib for plotting
+try:
+    import matplotlib
+    matplotlib.use('Agg')  # Use non-interactive backend
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
 from config import Config, Constants
 from utils import (
     ProgressTracker, MetricsTracker, GracefulShutdown, DeviceManager,
-    CheckpointManager, format_time_delta, count_parameters
+    CheckpointManager, PlotManager, format_time_delta, count_parameters
 )
 from data_loader import CachedJsonlDataset, EfficientDataLoader, create_dataloaders
 
@@ -45,6 +54,9 @@ class Trainer:
         self.epoch = 0
         self.batch_counter = 0
         self.best_val_loss = float('inf')
+        self.worst_val_loss = float('-inf')
+        self.best_train_loss = float('inf')
+        self.worst_train_loss = float('-inf')
         
         # Initialize data loaders first
         self._setup_data_loaders()
@@ -189,12 +201,13 @@ class Trainer:
                 )
                 running_mfu = mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
             
-            # Track metrics
-            self.metrics.log_metric('train_loss_batch', total_loss, self.batch_counter)
-            self.metrics.log_metric('learning_rate', current_lr, self.batch_counter)
-            self.metrics.log_metric('samples_per_sec', samples_per_sec, self.batch_counter)
-            if running_mfu > 0:
-                self.metrics.log_metric('mfu', running_mfu, self.batch_counter)
+            # Track metrics (only log detailed metrics at specified intervals)
+            if self.config.training.log_interval > 0 and batch_idx % self.config.training.log_interval == 0:
+                self.metrics.log_metric('train_loss_batch', total_loss, self.batch_counter)
+                self.metrics.log_metric('learning_rate', current_lr, self.batch_counter)
+                self.metrics.log_metric('samples_per_sec', samples_per_sec, self.batch_counter)
+                if running_mfu > 0:
+                    self.metrics.log_metric('mfu', running_mfu, self.batch_counter)
             
             # Update running totals
             epoch_loss += total_loss
@@ -209,7 +222,7 @@ class Trainer:
             
             # Periodic evaluation during epoch
             if (self.config.training.eval_interval > 0 and 
-                batch_idx % max(1, len(self.train_loader) // (100 // self.config.training.eval_interval)) == 0):
+                batch_idx % self.config.training.eval_interval == 0):
                 
                 print()  # New line for evaluation output
                 eval_results = self.evaluate()
@@ -220,9 +233,17 @@ class Trainer:
                       f"Train Loss: {eval_results['train']:.4f}{Constants.ENDC}  "
                       f"{Constants.MAGENTA}Val Loss: {eval_results['val']:.4f}{Constants.ENDC}")
                 
-                # Track best validation loss
+                # Track best and worst validation loss
                 if eval_results['val'] < self.best_val_loss:
                     self.best_val_loss = eval_results['val']
+                if eval_results['val'] > self.worst_val_loss:
+                    self.worst_val_loss = eval_results['val']
+                
+                # Track best and worst training loss
+                if eval_results['train'] < self.best_train_loss:
+                    self.best_train_loss = eval_results['train']
+                if eval_results['train'] > self.worst_train_loss:
+                    self.worst_train_loss = eval_results['train']
                 
                 # Record evaluation metrics
                 self.metrics.log_metric('train_loss_eval', eval_results['train'], self.batch_counter)
@@ -283,6 +304,9 @@ class Trainer:
             'epoch': self.epoch,
             'batch_counter': self.batch_counter,
             'best_val_loss': self.best_val_loss,
+            'worst_val_loss': self.worst_val_loss,
+            'best_train_loss': self.best_train_loss,
+            'worst_train_loss': self.worst_train_loss,
             'config': self.config.to_dict(),
             'metrics': dict(self.metrics.metrics),
             'metadata': CheckpointManager.create_checkpoint_metadata(self.config)
@@ -293,11 +317,17 @@ class Trainer:
         
         if success:
             logger.info(f"Checkpoint saved: {filepath}")
+            
+            # Create loss curve plot
+            self.plot_loss_curves(filepath)
+            
             if is_best:
                 # Also save as best model
                 best_path = filepath.replace('.pt', '_best.pt')
                 CheckpointManager.save_checkpoint_atomic(checkpoint_data, best_path)
                 logger.info(f"Best model saved: {best_path}")
+                # Create plot for best model too
+                self.plot_loss_curves(best_path)
         else:
             logger.error(f"Failed to save checkpoint: {filepath}")
         
@@ -320,6 +350,9 @@ class Trainer:
                 self.epoch = checkpoint.get('epoch', 0)
                 self.batch_counter = checkpoint.get('batch_counter', 0)
                 self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+                self.worst_val_loss = checkpoint.get('worst_val_loss', float('-inf'))
+                self.best_train_loss = checkpoint.get('best_train_loss', float('inf'))
+                self.worst_train_loss = checkpoint.get('worst_train_loss', float('-inf'))
                 
                 # Load metrics if available
                 if 'metrics' in checkpoint:
@@ -377,10 +410,22 @@ class Trainer:
                 self.metrics.log_metric('train_loss_epoch', eval_results['train'], self.epoch)
                 self.metrics.log_metric('val_loss_epoch', eval_results['val'], self.epoch)
                 
-                # Check if this is the best model
+                # Also log with standard names for plotting
+                self.metrics.log_metric('train_loss', eval_results['train'], self.epoch)
+                self.metrics.log_metric('val_loss', eval_results['val'], self.epoch)
+                
+                # Check if this is the best model and update all metrics
                 is_best = eval_results['val'] < self.best_val_loss
                 if is_best:
                     self.best_val_loss = eval_results['val']
+                if eval_results['val'] > self.worst_val_loss:
+                    self.worst_val_loss = eval_results['val']
+                
+                # Update train loss tracking
+                if eval_results['train'] < self.best_train_loss:
+                    self.best_train_loss = eval_results['train']
+                if eval_results['train'] > self.worst_train_loss:
+                    self.worst_train_loss = eval_results['train']
                 
                 # Save checkpoint
                 if self.config.training.save_checkpoints:
@@ -399,16 +444,32 @@ class Trainer:
             # Final evaluation
             final_eval = self.evaluate()
             
+            # Update final metrics (in case this final evaluation is the best/worst)
+            if final_eval['val'] < self.best_val_loss:
+                self.best_val_loss = final_eval['val']
+            if final_eval['val'] > self.worst_val_loss:
+                self.worst_val_loss = final_eval['val']
+            if final_eval['train'] < self.best_train_loss:
+                self.best_train_loss = final_eval['train']
+            if final_eval['train'] > self.worst_train_loss:
+                self.worst_train_loss = final_eval['train']
+            
             logger.info(f"Training completed in {format_time_delta(total_time)}")
             logger.info(f"Final train loss: {final_eval['train']:.4f}")
             logger.info(f"Final validation loss: {final_eval['val']:.4f}")
+            logger.info(f"Best train loss: {self.best_train_loss:.4f}")
+            logger.info(f"Worst train loss: {self.worst_train_loss:.4f}")
             logger.info(f"Best validation loss: {self.best_val_loss:.4f}")
+            logger.info(f"Worst validation loss: {self.worst_val_loss:.4f}")
             
             return {
                 'success': True,
                 'final_train_loss': final_eval['train'],
                 'final_val_loss': final_eval['val'],
+                'best_train_loss': self.best_train_loss,
+                'worst_train_loss': self.worst_train_loss,
                 'best_val_loss': self.best_val_loss,
+                'worst_val_loss': self.worst_val_loss,
                 'total_time': total_time,
                 'epochs_completed': self.epoch
             }
@@ -437,3 +498,24 @@ class Trainer:
         print(f"\n{Constants.BOLD}{Constants.BLUE}╔══════════════════════════════════════════╗{Constants.ENDC}")
         print(f"{Constants.BOLD}{Constants.BLUE}║{padding}{epoch_text}{right_padding}║{Constants.ENDC}")
         print(f"{Constants.BOLD}{Constants.BLUE}╚══════════════════════════════════════════╝{Constants.ENDC}\n")
+    
+    def plot_loss_curves(self, checkpoint_path: str) -> None:
+        """Generate and save loss curve plots"""
+        try:
+            # Create plot filename
+            plot_path = checkpoint_path.replace('.pt', '.png')
+            
+            # Generate plot title
+            dataset_name = self.config.data.dataset_name
+            title = f"Training Progress - {dataset_name} (Epoch {self.epoch+1})"
+            
+            # Generate the plot
+            success = PlotManager.plot_training_curves(self.metrics, plot_path, title)
+            
+            if success:
+                logger.info(f"Loss curve plot saved: {plot_path}")
+            else:
+                logger.warning("Could not generate loss curve plot")
+                
+        except Exception as e:
+            logger.warning(f"Error generating loss curve plot: {e}")

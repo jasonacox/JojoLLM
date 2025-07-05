@@ -40,10 +40,10 @@ def parse_arguments():
                         help='Learning rate (default: 6e-4)')
     
     # Evaluation and logging
-    parser.add_argument('--eval_interval', type=int, default=10,
-                        help='How often to evaluate during an epoch (as percentage, default: 10)')
-    parser.add_argument('--log_interval', type=int, default=10,
-                        help='How often to log progress (as percentage, default: 10)')
+    parser.add_argument('--eval_interval', type=int, default=50,
+                        help='How often to evaluate during training (in batches, default: 50)')
+    parser.add_argument('--log_interval', type=int, default=50,
+                        help='How often to log progress (in batches, default: 50)')
     
     # System
     parser.add_argument('--device', type=str, default=None,
@@ -118,7 +118,14 @@ def setup_environment(args):
     # Print header
     print(f"{Constants.BOLD}{Constants.BLUE}╔═══════════════════════════════════════════════════════╗{Constants.ENDC}")
     print(f"{Constants.BOLD}{Constants.BLUE}║                Jojo LLM Training Program              ║{Constants.ENDC}")
-    print(f"{Constants.BOLD}{Constants.BLUE}║            Version {Constants.VERSION} \"{Constants.VERSION_NAME}\"            ║{Constants.ENDC}")
+    
+    # Center version info
+    version_info = f"Version {Constants.VERSION} \"{Constants.VERSION_NAME}\""
+    box_width = 55  # Internal width of the box (57 chars - 2 border chars)
+    padding_left = (box_width - len(version_info)) // 2
+    padding_right = box_width - len(version_info) - padding_left  # Calculate exact right padding
+    
+    print(f"{Constants.BOLD}{Constants.BLUE}║{' ' * padding_left}{version_info}{' ' * padding_right}║{Constants.ENDC}")
     print(f"{Constants.BOLD}{Constants.BLUE}╚═══════════════════════════════════════════════════════╝{Constants.ENDC}")
     print()
     
@@ -269,6 +276,7 @@ def main():
     
     # Setup environment
     logger = setup_environment(args)
+    logger.info("--- Jojo LLM Training Script Started ---")
     
     try:
         # Create configuration
@@ -320,7 +328,10 @@ def main():
             print(f"{Constants.BOLD}Total training time:{Constants.ENDC}  {Constants.GREEN}{results['total_time']:.0f}s{Constants.ENDC}")
             print(f"{Constants.BOLD}Final train loss:{Constants.ENDC}     {Constants.GREEN}{results['final_train_loss']:.4f}{Constants.ENDC}")
             print(f"{Constants.BOLD}Final val loss:{Constants.ENDC}       {Constants.GREEN}{results['final_val_loss']:.4f}{Constants.ENDC}")
+            print(f"{Constants.BOLD}Best train loss:{Constants.ENDC}      {Constants.GREEN}{results['best_train_loss']:.4f}{Constants.ENDC}")
             print(f"{Constants.BOLD}Best val loss:{Constants.ENDC}        {Constants.GREEN}{results['best_val_loss']:.4f}{Constants.ENDC}")
+            print(f"{Constants.BOLD}Worst train loss:{Constants.ENDC}     {Constants.RED}{results['worst_train_loss']:.4f}{Constants.ENDC}")
+            print(f"{Constants.BOLD}Worst val loss:{Constants.ENDC}       {Constants.RED}{results['worst_val_loss']:.4f}{Constants.ENDC}")
             print(f"{Constants.BOLD}Model saved to:{Constants.ENDC}       {Constants.GREEN}{checkpoint_path}{Constants.ENDC}")
             print(f"\n{Constants.BOLD}{Constants.CYAN}To generate text with this model, run:{Constants.ENDC}")
             if "chat" in config.data.dataset_name:

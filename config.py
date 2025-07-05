@@ -56,8 +56,8 @@ class TrainingConfig:
     batch_size: int = 12
     gradient_accumulation_steps: int = 40
     eval_iters: int = 200
-    eval_interval: int = 10
-    log_interval: int = 10
+    eval_interval: int = 50
+    log_interval: int = 50
     save_checkpoints: bool = True
     compile_model: bool = True
 

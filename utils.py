@@ -139,6 +139,12 @@ class MetricsTracker:
         steps = [step for step, _ in data]
         values = [value for _, value in data]
         return steps, values
+    
+    def get_metric_values(self, name: str) -> List[float]:
+        """Get metric values only (for plotting)"""
+        if name not in self.metrics or not self.metrics[name]:
+            return []
+        return [value for _, value in self.metrics[name]]
 
 
 class TensorBuffer:
@@ -286,6 +292,104 @@ class CheckpointManager:
                     os.remove(temp_filepath)
             except:
                 pass
+            return False
+
+
+class PlotManager:
+    """Manage training plots and visualizations"""
+    
+    @staticmethod
+    def plot_training_curves(metrics: 'MetricsTracker', save_path: str, title: str = "Training Progress") -> bool:
+        """Plot training and validation loss curves and save as PNG"""
+        try:
+            import matplotlib
+            matplotlib.use('Agg')  # Use non-interactive backend
+            import matplotlib.pyplot as plt
+            
+            # Get loss data (try different metric names)
+            train_losses = (metrics.get_metric_values('train_loss_epoch') or 
+                           metrics.get_metric_values('train_loss_eval') or 
+                           metrics.get_metric_values('train_loss'))
+            val_losses = (metrics.get_metric_values('val_loss_epoch') or 
+                         metrics.get_metric_values('val_loss_eval') or 
+                         metrics.get_metric_values('val_loss'))
+            
+            if not train_losses and not val_losses:
+                return False
+            
+            # Create figure with subplots
+            fig, axes = plt.subplots(2, 1, figsize=(12, 10), gridspec_kw={'height_ratios': [3, 1]})
+            
+            # Plot loss curves on top subplot
+            ax1 = axes[0]
+            
+            if train_losses:
+                train_steps = list(range(len(train_losses)))
+                ax1.plot(train_steps, train_losses, label='Train Loss', color='blue', marker='.', alpha=0.7)
+                
+                # Add min value annotation
+                min_train_idx = train_losses.index(min(train_losses))
+                min_train_loss = train_losses[min_train_idx]
+                ax1.annotate(f'Min: {min_train_loss:.4f}', 
+                           (min_train_idx, min_train_loss),
+                           xytext=(10, -20),
+                           textcoords='offset points',
+                           arrowprops=dict(arrowstyle='->', color='blue', alpha=0.7))
+            
+            if val_losses:
+                val_steps = list(range(len(val_losses)))
+                ax1.plot(val_steps, val_losses, label='Val Loss', color='orange', marker='.', alpha=0.7)
+                
+                # Add min value annotation
+                min_val_idx = val_losses.index(min(val_losses))
+                min_val_loss = val_losses[min_val_idx]
+                ax1.annotate(f'Min: {min_val_loss:.4f}', 
+                           (min_val_idx, min_val_loss),
+                           xytext=(10, 20),
+                           textcoords='offset points',
+                           arrowprops=dict(arrowstyle='->', color='orange', alpha=0.7))
+            
+            ax1.set_xlabel('Evaluation Step')
+            ax1.set_ylabel('Loss')
+            ax1.set_title(title)
+            ax1.legend(loc='upper right')
+            ax1.grid(True, linestyle='--', alpha=0.5)
+            
+            # Plot learning rate on bottom subplot if available
+            ax2 = axes[1]
+            lr_values = metrics.get_metric_values('learning_rate')
+            
+            if lr_values:
+                lr_steps = list(range(len(lr_values)))
+                ax2.plot(lr_steps, lr_values, color='green', marker='.', alpha=0.7)
+                ax2.set_xlabel('Step')
+                ax2.set_ylabel('Learning Rate')
+                ax2.set_title('Learning Rate Schedule')
+                ax2.grid(True, linestyle='--', alpha=0.5)
+                ax2.ticklabel_format(axis='y', style='sci', scilimits=(0,0))
+            else:
+                ax2.text(0.5, 0.5, 'No learning rate data available', 
+                        ha='center', va='center', transform=ax2.transAxes)
+                ax2.set_xlabel('Step')
+                ax2.set_ylabel('Learning Rate')
+                ax2.set_title('Learning Rate Schedule')
+            
+            # Add timestamp
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            plt.figtext(0.5, 0.01, f"Generated: {timestamp}", ha="center", fontsize=8, 
+                       bbox={"facecolor":"white", "alpha":0.5, "pad":5})
+            
+            plt.tight_layout()
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            
+            return True
+            
+        except ImportError:
+            logging.warning("Matplotlib not available. Cannot generate plots.")
+            return False
+        except Exception as e:
+            logging.error(f"Error generating plot: {e}")
             return False
 
 
