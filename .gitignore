@@ -74,33 +74,28 @@ poetry.lock
 cython_debug/
 
 # Project items to avoid
+# Virtual environment
 venv
-data/TinyStoriesV2-GPT4-train.txt
-data/TinyStoriesV2-GPT4-valid.txt
-data/story-val.bin
-data/story-train.bin
-data/chitchat-train.bin
-data/chat-val.txt
-data/chitchat-train.txt
-data/chitchat-val.bin
-data/chitchat-val.txt
-data/chat-train.bin
-data/dailydialog-train.txt
+
+# Data files
+data/*.bin
+data/*.txt
+data/*.jsonl
+data/*.json
 *.bin
+*.zip
 *-train.txt
 *-val.txt
-*.zip
-dailydialog/
-models/
 *boundaries.txt
 *tokens.txt
-sandbox/
-data/squad-train-v2.0.json
-tmp/empatheticdialogues.tar.gz
-tmp/empatheticdialogues/*.csv
 
-data/wordlist.txt
-data/*-checkpoint.txt
-data/*-train.jsonl
-data/*-val.jsonl
+# Logs and caches
 train.log
+cache/
+tmp/
+
+# Directories
+dailydialog/
+models/
+sandbox/
+tmp/empatheticdialogues/

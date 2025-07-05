@@ -1,0 +1,49 @@
+{
+  "model": {
+    "n_layer": 12,
+    "n_head": 12,
+    "n_embd": 768,
+    "block_size": 1024,
+    "dropout": 0.2,
+    "bias": false,
+    "vocab_size": 50304
+  },
+  "optimizer": {
+    "learning_rate": 0.0006,
+    "weight_decay": 0.1,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "grad_clip": 1.0
+  },
+  "scheduler": {
+    "decay_lr": true,
+    "warmup_iters": 2000,
+    "lr_decay_iters": 60000,
+    "min_lr": 6e-05,
+    "warmup_fraction": 0.1,
+    "cooldown_fraction": 0.9
+  },
+  "training": {
+    "max_epochs": 1,
+    "batch_size": 12,
+    "gradient_accumulation_steps": 40,
+    "eval_iters": 200,
+    "eval_interval": 10,
+    "log_interval": 10,
+    "save_checkpoints": true,
+    "compile_model": true
+  },
+  "system": {
+    "device": "cuda",
+    "dtype": "bfloat16",
+    "seed": 1337,
+    "num_workers": 4,
+    "pin_memory": true
+  },
+  "data": {
+    "dataset_name": "chitchat",
+    "data_dir": "data/",
+    "cache_tokenized": true,
+    "cache_dir": "cache/"
+  }
+}
