@@ -164,8 +164,8 @@ def validate_config(config: Config) -> None:
 # Constants
 class Constants:
     # Version information
-    VERSION = "2.0.0"
-    VERSION_NAME = "Modular Architecture"
+    VERSION = "2.0.1"
+    VERSION_NAME = "Enhanced Loss Tracking"
     
     DEFAULT_VOCAB_SIZE = 50304
     PROGRESS_BAR_LENGTH = 30

@@ -1,5 +1,54 @@
 # Jojo LLM Training Script - Release Notes
 
+## Version 2.0.1 "Enhanced Loss Tracking" - July 5, 2025
+
+### 🐛 **Bug Fixes & Improvements**
+
+#### **Fixed Best Loss Logic Bug**
+- **Issue**: Final evaluation results could show final loss better than "best" loss due to timing of metric updates
+- **Solution**: Added comprehensive final evaluation metric updates to ensure accuracy
+- **Impact**: Best/worst loss reporting is now 100% accurate throughout training
+
+#### **Enhanced Loss Tracking System**
+- **New Metrics**: Added comprehensive loss tracking for both training and validation:
+  - `best_train_loss` - Best training loss achieved during training
+  - `worst_train_loss` - Worst training loss encountered
+  - `best_val_loss` - Best validation loss achieved (improved logic)
+  - `worst_val_loss` - Worst validation loss encountered
+- **Visual Enhancement**: Worst losses displayed in red color for immediate identification
+- **Checkpoint Integration**: All loss metrics saved and restored in checkpoints
+
+#### **Improved Training Summary**
+- **Before**: Limited to final train/val loss and best val loss (3 metrics)
+- **After**: Complete loss analysis with 6 metrics showing training progression
+- **Better Insights**: Users can now see full training performance range from worst to best
+
+#### **Example Output**
+```
+╔═══════════════════════════════════════════════════════╗
+║                TRAINING COMPLETED                     ║
+╚═══════════════════════════════════════════════════════╝
+Total training time:  30770s
+Final train loss:     2.1266
+Final val loss:       2.1966  
+Best train loss:      2.1266
+Best val loss:        2.1966
+Worst train loss:     10.6873
+Worst val loss:       10.8952
+```
+
+### 🔧 **Technical Details**
+
+- **Metric Updates**: Both periodic evaluations and final assessment now update all loss metrics
+- **Thread Safety**: Proper metric tracking during concurrent operations
+- **Backward Compatibility**: Existing checkpoints load correctly with default values for new metrics
+
+### 📊 **Benefits**
+
+- **Debugging**: Easier identification of training instability by comparing best vs worst
+- **Model Selection**: Better understanding of model convergence patterns  
+- **Training Analysis**: Complete picture of training dynamics and loss evolution
+
 ## Version 2.0.0 "Modular Architecture" - July 4, 2025
 
 ### 🎉 Major Release: Complete Refactor
@@ -155,9 +204,10 @@ This modular architecture provides the foundation for future improvements:
 
 ## Version Information
 
-- **Current Version**: 2.0.0 "Modular Architecture"
-- **Previous Version**: 1.0.0 (Original Implementation)
-- **Release Date**: July 4, 2025
+- **Current Version**: 2.0.1 "Enhanced Loss Tracking"
+- **Previous Version**: 2.0.0 "Modular Architecture"
+- **Original Version**: 1.0.0 (Original Implementation)
+- **Release Date**: July 5, 2025
 - **Compatibility**: PyTorch 2.0+, Python 3.8+
 
 ## Support

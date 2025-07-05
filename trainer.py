@@ -218,7 +218,7 @@ class Trainer:
             progress_line = progress_tracker.update(
                 batch_idx, total_loss, current_lr, samples_per_sec, running_mfu
             )
-            print(f"\r{progress_line}", end="", flush=True)
+            print(f"{progress_line}", flush=True)
             
             # Periodic evaluation during epoch
             if (self.config.training.eval_interval > 0 and 
