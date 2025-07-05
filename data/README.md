@@ -32,24 +32,40 @@ This directory contains training data used to school Jojo and scripts for prepar
 
 This project uses the ChatML template. The tokenizer is using the tiktoken GPT-2 (r50k_base) vocabulary with an extension to include the ChatML special characters `<|im_end|>` and `<|im_start|>` (tokens 50257 and 50258).
 
-Example:
+Examples:
 
 ```
 <|im_start|>system
-You are a helpful assistant designed to answer questions about general knowledge.
-<|im_end|>
+You are a helpful assistant designed to answer questions about general knowledge.<|im_end|>
 <|im_start|>user
-What is the capital of France?
-<|im_end|>
+What is the capital of France?<|im_end|>
 <|im_start|>assistant
-Paris.
-<|im_end|>
+Paris.<|im_end|>
+<|endoftext|>
+
+<|im_start|>system
+You are a helpful literary assistant.<|im_end|>
 <|im_start|>user
-Who wrote "Romeo and Juliet"?
-<|im_end|>
+Who wrote "Romeo and Juliet"?<|im_end|>
 <|im_start|>assistant
-William Shakespeare.
-<|im_end|>
+William Shakespeare.<|im_end|>
+<|endoftext|>
+```
+
+**Multi-turn Conversation**
+
+```
+<|im_start|>system
+You are a helpful and friendly chatbot.<|im_end|>
+<|im_start|>user
+Hello, how are you?<|im_end|>
+<|im_start|>assistant
+I’m doing well, thank you for asking! How can I help you today?<|im_end|>
+<|im_start|>user
+Could you explain how photosynthesis works?<|im_end|>
+<|im_start|>assistant
+Certainly! Photosynthesis is … (etc.)<|im_end|>
+<|endoftext|>
 ```
 
 ## Preparation Scripts

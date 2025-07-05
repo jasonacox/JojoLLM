@@ -26,6 +26,7 @@ from tqdm import tqdm
 import re
 import sys
 import random
+import json
 
 # Special tokens for chat format
 SPECIAL_TOKENS = {
@@ -37,6 +38,13 @@ SPECIAL_TOKENS = {
     "endoftext": "<|endoftext|>"
 }
 CONVERSATION_SEPARATOR = "\n<|endoftext|>\n\n"
+SYSTEM_PROMPTS = [
+    "You are a helpful, harmless, and honest AI assistant.",
+    "You are an AI assistant designed to assist users with their questions and tasks.",
+    "You are Jojo, an AI assistant created to help users with information and tasks.",
+    "You are a friendly AI assistant ready to help with any questions or tasks.",
+    "You are an AI assistant trained to provide accurate and helpful responses."
+]
 
 # Helper functions for new format
 def format_user_message(message):
@@ -60,7 +68,8 @@ def ensure_dir(directory):
 def generate_chitchat_dataset():
     """
     Generate a simple dataset of common chit-chat exchanges.
-    Each exchange consists of a human greeting/question and an assistant response.
+    Each exchange consists of a system prompt, human greeting/question, and assistant response.
+    Returns a list of conversations (each as a list of ChatML-formatted turns).
     """
     chitchat_data = []
     
@@ -341,27 +350,29 @@ def generate_chitchat_dataset():
     ]
     
     # Generate single-turn conversations from greetings
-    print("Generating greeting exchanges...")
+    print("Generating greeting exchanges...", end="")
     for greeting, responses in greetings:
         for response in responses:
             conversation = [
                 format_user_message(greeting),
                 format_assistant_message(response)
             ]
-            chitchat_data.append("\n".join(conversation))
+            chitchat_data.append(conversation)
+    print(f"  ({len(chitchat_data)} total exchanges)")
     
     # Generate single-turn conversations from questions
-    print("Generating question exchanges...")
+    print("Generating question exchanges...", end="")
     for question, responses in questions:
         for response in responses:
             conversation = [
                 format_user_message(question),
                 format_assistant_message(response)
             ]
-            chitchat_data.append("\n".join(conversation))
-    
+            chitchat_data.append(conversation)
+    print(f"  ({len(chitchat_data)} total exchanges)")
+
     # Generate two-turn conversations (greeting + follow-up)
-    print("Generating multi-turn exchanges...")
+    print("Generating multi-turn exchanges...",end="")
     for greeting, greeting_responses in greetings:
         for greeting_response in greeting_responses[:2]:  # Limit to avoid too many combinations
             for follow_up, follow_up_responses in follow_ups:
@@ -372,18 +383,20 @@ def generate_chitchat_dataset():
                         format_user_message(follow_up),
                         format_assistant_message(follow_up_response)
                     ]
-                    chitchat_data.append("\n".join(conversation))
+                    chitchat_data.append(conversation)
+    print(f"  ({len(chitchat_data)} total exchanges)")
     
     # Generate name introduction conversations
-    print("Generating name introduction exchanges...")
+    print("Generating name introduction exchanges...", end="")
     for name_intro, responses in name_interactions:
         for response in responses:
             conversation = [
                 format_user_message(name_intro),
                 format_assistant_message(response)
             ]
-            chitchat_data.append("\n".join(conversation))
-    
+            chitchat_data.append(conversation)
+    print(f"  ({len(chitchat_data)} total exchanges)")
+
     # Add some more complex multi-turn conversations
     
     complex_conversations = [
@@ -526,109 +539,37 @@ def generate_chitchat_dataset():
     
     print(f"Generated {len(name_complex_conversations)} complex conversations with diverse names")
     
-    print("Adding complex conversations...")
-    for conv in complex_conversations:
-        formatted_conv = []
-        for i, message in enumerate(conv):
-            if i % 2 == 0:
-                # Human message
-                formatted_conv.append(format_user_message(message))
-            else:
-                # Assistant message
-                formatted_conv.append(format_assistant_message(message))
-        
-        chitchat_data.append("\n".join(formatted_conv))
-    
-    print(f"Generated {len(chitchat_data)} chit-chat conversations in total")
+    # Instead of joining with \n, keep each conversation as a list of turns (strings)
     return chitchat_data
+
+# New function to wrap conversations with a system prompt and output as JSONL
+
+def write_jsonl_conversations(conversations, output_path, system_prompts=SYSTEM_PROMPTS):
+    with open(output_path, 'w', encoding='utf-8') as f:
+        for conv in conversations:
+            system_prompt = random.choice(system_prompts)
+            chatml = [f"<|im_start|>system\n{system_prompt}\n<|im_end|>"] + conv
+            chatml.append("<|endoftext|>")
+            text = "\n".join(chatml)
+            json.dump({"text": text}, f, ensure_ascii=False)
+            f.write("\n")
 
 def main():
     print("\n=== Jojo LLM Chit-Chat Dataset Preparation ===\n")
-    
     data_dir = os.path.dirname(os.path.abspath(__file__))
     output_base = os.path.join(data_dir, 'chitchat')
     ensure_dir(output_base)
-    
     # Generate the dataset
     chitchat_data = generate_chitchat_dataset()
-    
-    # Split into train and validation sets (90/10 split)
-    random.seed(42)  # For reproducibility
+    # Shuffle and split into train/val
     random.shuffle(chitchat_data)
-    
-    split_idx = int(0.9 * len(chitchat_data))
-    train_data = chitchat_data[:split_idx]
-    val_data = chitchat_data[split_idx:]
-    
-    print(f"Split into {len(train_data)} training and {len(val_data)} validation conversations.")
-    
-    # Combine all conversations into text files with conversation separators
-    conversation_separator = f"\n{SPECIAL_TOKENS['endoftext']}\n"
-    train_text = conversation_separator.join(train_data)
-    val_text = conversation_separator.join(val_data)
-    
-    # Save the raw text files
-    train_file = os.path.join(data_dir, "chitchat-train.txt")
-    val_file = os.path.join(data_dir, "chitchat-val.txt")
-    
-    with open(train_file, 'w', encoding='utf-8') as f:
-        f.write(train_text)
-    
-    with open(val_file, 'w', encoding='utf-8') as f:
-        f.write(val_text)
-        
-    print(f"Raw text files saved to {train_file} and {val_file}")
-    
-    # Encode with tiktoken gpt2
-    try:
-        enc = tiktoken.get_encoding("gpt2")
-        print("Encoding training data...")
-        train_ids = enc.encode(train_text, allowed_special="all")
-        print("Encoding validation data...")
-        val_ids = enc.encode(val_text, allowed_special="all")
-        
-        print(f"Train data: {len(train_ids):,} tokens")
-        print(f"Validation data: {len(val_ids):,} tokens")
-    except Exception as e:
-        print(f"Error during encoding: {str(e)}")
-        sys.exit(1)
-
-    # Export to bin files for training
-    try:
-        train_ids = np.array(train_ids, dtype=np.uint16)
-        val_ids = np.array(val_ids, dtype=np.uint16)
-        
-        train_bin = os.path.join(data_dir, 'chitchat-train.bin')
-        val_bin = os.path.join(data_dir, 'chitchat-val.bin')
-        
-        train_ids.tofile(train_bin)
-        val_ids.tofile(val_bin)
-        
-        print(f"Binary files saved to:")
-        print(f"  - {train_bin}")
-        print(f"  - {val_bin}")
-        print("\nPreparation complete! You can now train your model with the chit-chat dataset.")
-        
-        # Print usage instructions
-        print("\nTo train your model with this chit-chat dataset, run:")
-        print("python train.py --dataset chitchat")
-        
-        # Create an example prompt file
-        example_dir = os.path.join(os.path.dirname(data_dir), 'examples')
-        if not os.path.exists(example_dir):
-            os.makedirs(example_dir)
-        
-        example_file = os.path.join(example_dir, 'chitchat_prompt.txt')
-        with open(example_file, 'w', encoding='utf-8') as f:
-            f.write(format_user_message("Hi") + "\n" + SPECIAL_TOKENS['im_start'] + SPECIAL_TOKENS['assistant'] + "\n")
-        
-        print(f"\nAn example chit-chat prompt has been created at: {example_file}")
-        print("Use this with gen.py to test your trained model:")
-        print(f"python gen.py models/chitchat5000.pt --prompt_file examples/chitchat_prompt.txt")
-        
-    except Exception as e:
-        print(f"Error saving binary files: {str(e)}")
-        sys.exit(1)
+    split = int(0.95 * len(chitchat_data))
+    train_convs = chitchat_data[:split]
+    val_convs = chitchat_data[split:]
+    # Write JSONL files
+    write_jsonl_conversations(train_convs, os.path.join(data_dir, 'chitchat-train.jsonl'))
+    write_jsonl_conversations(val_convs, os.path.join(data_dir, 'chitchat-val.jsonl'))
+    print(f"Wrote {len(train_convs)} train and {len(val_convs)} val conversations to JSONL files.")
 
 if __name__ == "__main__":
     main()

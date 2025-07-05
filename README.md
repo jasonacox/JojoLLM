@@ -47,7 +47,7 @@ This project aims to build a large language model (LLM) from scratch, inspired b
 4. **Train the model:**
    Run the training script. If you have a CUDA-capable GPU, you will be prompted to select which GPU to use.
    ```bash
-   python train.py [--dataset DATASET] [--max_iters MAX_ITERS] [options]
+   python train.py [--dataset DATASET] [--epochs EPOCHS] [options]
    ```
    
    Available options:
@@ -58,16 +58,14 @@ This project aims to build a large language model (LLM) from scratch, inspired b
      - `chitchat`: Simple greetings and short exchanges for basic social interactions
      - `knowledge`: General knowledge Q&A pairs for factual responses
      - `dictionary`: Word definitions for vocabulary and language understanding
-   - `--max_iters`: Set the total number of training iterations (default: 5000)
-   - `--epochs`: Number of epochs to train for (overrides max_iters if specified)
-   - `--epoch_mode`: Use epoch-based training instead of iteration-based training. This ensures the full dataset is used for each epoch, providing more thorough coverage of your data.
+   - `--epochs`: Number of epochs to train for (default: 1)
    - `--seed`: Set random seed for reproducibility (default: 1337)
-   - `--eval_interval`: How often to run evaluation (default: 500)
-   - `--log_interval`: How often to log training progress (default: 10)
+   - `--eval_interval`: How often to evaluate during an epoch (as a percentage, default: 10)
+   - `--log_interval`: How often to log training progress (as a percentage, default: 10)
    - `--no-color`: Disable colored output
    - `--checkpoint`: Path to a checkpoint file to continue training from
-   - `--output_checkpoint`: Custom path to save the output checkpoint
-   - `--reset_iter`: Reset iteration counter to 0 when loading from checkpoint
+   - `--output_checkpoint`: Custom path to save the output checkpoint (defaults to models/{dataset}_epoch{epochs}.pt)
+   - `--reset_epoch`: Reset epoch counter to 0 when loading from checkpoint
    
    Examples:
    ```bash
@@ -80,17 +78,17 @@ This project aims to build a large language model (LLM) from scratch, inspired b
    # Train on the chitchat dataset for basic greeting responses
    python train.py --dataset chitchat
    
-   # Train for more iterations
-   python train.py --max_iters 10000
+   # Train for multiple epochs
+   python train.py --epochs 5
    
-   # Train for a specific number of epochs (epoch-based training)
-   python train.py --dataset chat --epochs 5 --epoch_mode
+   # Train with a specific dataset
+   python train.py --dataset chat --epochs 3
    
    # Continue training from a checkpoint with a different dataset
-   python train.py --checkpoint models/story5000.pt --dataset chat
+   python train.py --checkpoint models/story_epoch5.pt --dataset chat
    
-   # Continue training but reset the iteration counter to 0
-   python train.py --checkpoint models/story5000.pt --dataset chat --reset_iter
+   # Continue training but reset the epoch counter to 0
+   python train.py --checkpoint models/story_epoch5.pt --dataset chat --reset_epoch
    
    # Specify a custom output checkpoint path
    python train.py --dataset chat --output_checkpoint models/custom_name.pt
@@ -98,8 +96,8 @@ This project aims to build a large language model (LLM) from scratch, inspired b
    
    - The script will display all available CUDA devices and their memory.
    - Enter the device number you wish to use when prompted.
-   - When using an existing checkpoint, the script will check if it has already been trained beyond the requested max_iters or epochs and provide options.
-   - The script supports both iteration-based and epoch-based training modes. **Epoch-based training ensures the full dataset is used for each epoch, providing more thorough and consistent coverage of your data.**
+   - When using an existing checkpoint, the script will check if it has already been trained beyond the requested epochs and provide options.
+   - Training is epoch-based, ensuring the full dataset is used for each epoch, providing thorough and consistent coverage of your data.
    - Checkpoints are saved automatically during training at regular intervals and on interruption or error.
    - The script provides robust checkpoint handling and safe file operations to prevent checkpoint corruption.
 
@@ -222,7 +220,7 @@ For more information on implementation details, see the `setup_tokenizer.py` and
 - The training script provides robust checkpoint handling:
   - You can continue training from any checkpoint with the `--checkpoint` option
   - The script will detect if a checkpoint has already been trained beyond your requested iterations
-  - You can reset the iteration counter with `--reset_iter` to start counting from zero
+  - You can reset the epoch counter with `--reset_epoch` to start counting from zero
   - You can specify custom output paths with `--output_checkpoint`
   - The script uses safe file operations to prevent checkpoint corruption
 - All dependencies are listed in `requirements.txt`.

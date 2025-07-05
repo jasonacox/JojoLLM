@@ -3,3 +3,4 @@ transformers
 tiktoken
 tqdm
 numpy
+matplotlib

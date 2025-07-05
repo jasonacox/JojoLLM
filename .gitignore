@@ -101,4 +101,6 @@ tmp/empatheticdialogues/*.csv
 
 data/wordlist.txt
 data/*-checkpoint.txt
-
+data/*-train.jsonl
+data/*-val.jsonl
+train.log
