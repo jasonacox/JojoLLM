@@ -36,20 +36,27 @@ class CachedJsonlDataset(Dataset):
         self.block_size = block_size
         self.cache_dir = cache_dir
         
-        # Create cache directory if it doesn't exist
-        os.makedirs(cache_dir, exist_ok=True)
-        
-        # Generate cache file path
-        cache_filename = f"{os.path.basename(jsonl_file)}_bs{block_size}.cache"
-        self.cache_file = os.path.join(cache_dir, cache_filename)
-        
-        # Load or create cached data
-        if os.path.exists(self.cache_file) and not force_retokenize:
-            logger.info(f"Loading cached tokenized data from {self.cache_file}")
-            self._load_cached_data()
+        # Handle caching only if cache_dir is provided
+        if cache_dir:
+            # Create cache directory if it doesn't exist
+            os.makedirs(cache_dir, exist_ok=True)
+            
+            # Generate cache file path
+            cache_filename = f"{os.path.basename(jsonl_file)}_bs{block_size}.cache"
+            self.cache_file = os.path.join(cache_dir, cache_filename)
+            
+            # Load or create cached data
+            if os.path.exists(self.cache_file) and not force_retokenize:
+                logger.info(f"Loading cached tokenized data from {self.cache_file}")
+                self._load_cached_data()
+            else:
+                logger.info(f"Tokenizing and caching data from {jsonl_file}")
+                self._tokenize_and_cache()
         else:
-            logger.info(f"Tokenizing and caching data from {jsonl_file}")
-            self._tokenize_and_cache()
+            # No caching - tokenize directly
+            logger.info(f"Tokenizing data from {jsonl_file} (no caching)")
+            self.cache_file = None
+            self._tokenize_and_cache(save_cache=False)
         
         # Initialize epoch tracking
         self.reset_epoch()
@@ -67,7 +74,7 @@ class CachedJsonlDataset(Dataset):
         self.special_token_stats = cache_data.get('special_token_stats', {})
         self.metadata = cache_data.get('metadata', {})
     
-    def _tokenize_and_cache(self) -> None:
+    def _tokenize_and_cache(self, save_cache: bool = True) -> None:
         """Tokenize conversations and cache the results"""
         self.conversations = []
         self.total_tokens = 0
@@ -117,18 +124,21 @@ class CachedJsonlDataset(Dataset):
             'tokenizer_type': str(type(self.tokenizer))
         }
         
-        # Cache the tokenized data
-        cache_data = {
-            'conversations': self.conversations,
-            'total_tokens': self.total_tokens,
-            'special_token_stats': self.special_token_stats,
-            'metadata': self.metadata
-        }
-        
-        with open(self.cache_file, 'wb') as f:
-            pickle.dump(cache_data, f)
-        
-        logger.info(f"Cached tokenized data to {self.cache_file}")
+        # Cache the tokenized data only if save_cache is True and cache_file is set
+        if save_cache and self.cache_file:
+            cache_data = {
+                'conversations': self.conversations,
+                'total_tokens': self.total_tokens,
+                'special_token_stats': self.special_token_stats,
+                'metadata': self.metadata
+            }
+            
+            with open(self.cache_file, 'wb') as f:
+                pickle.dump(cache_data, f)
+            
+            logger.info(f"Cached tokenized data to {self.cache_file}")
+        elif not save_cache:
+            logger.info("Tokenization completed (caching disabled)")
     
     def _tokenize_text(self, text: str) -> List[int]:
         """Tokenize text with fallback handling"""
@@ -197,7 +207,8 @@ class CachedJsonlDataset(Dataset):
         """
         # Use tensor buffer for efficiency
         if not hasattr(self, '_tensor_buffer') or self._tensor_buffer is None:
-            self._tensor_buffer = TensorBuffer(batch_size, self.block_size, device or torch.device('cpu'))
+            buffer_device = device or torch.device('cpu')
+            self._tensor_buffer = TensorBuffer(batch_size, self.block_size, buffer_device)
         
         x_batch, y_batch = self._tensor_buffer.get_buffers()
         epoch_complete = False

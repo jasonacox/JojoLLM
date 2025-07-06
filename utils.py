@@ -226,12 +226,13 @@ class DeviceManager:
         return f'cuda:{best_device}'
     
     @staticmethod
-    def optimize_memory(device: str) -> None:
+    def optimize_memory(device: str, memory_fraction: float = 0.9) -> None:
         """Optimize memory usage for the given device"""
         if device.startswith('cuda'):
             torch.cuda.empty_cache()
             # Set memory fraction to prevent OOM
-            torch.cuda.set_per_process_memory_fraction(0.9)
+            torch.cuda.set_per_process_memory_fraction(memory_fraction)
+            print(f"{Constants.GREEN}CUDA memory optimization enabled: {memory_fraction*100:.0f}% memory fraction{Constants.ENDC}")
 
 
 class CheckpointManager:
@@ -489,3 +490,98 @@ def get_model_size_mb(model: torch.nn.Module) -> float:
         buffer_size += buffer.nelement() * buffer.element_size()
     
     return (param_size + buffer_size) / (1024 ** 2)
+
+
+class MFUCalculator:
+    """Calculate and track Model FLOPs Utilization (MFU)"""
+    
+    def __init__(self, model_config, device_peak_flops=None):
+        self.model_config = model_config
+        
+        # RTX 3090 peak performance for bfloat16
+        if device_peak_flops is None:
+            if torch.cuda.is_available():
+                gpu_name = torch.cuda.get_device_name()
+                if "3090" in gpu_name:
+                    # RTX 3090: ~35 TFLOPS for bfloat16
+                    self.device_peak_flops = 35e12
+                elif "4090" in gpu_name:
+                    # RTX 4090: ~83 TFLOPS for bfloat16  
+                    self.device_peak_flops = 83e12
+                elif "A100" in gpu_name:
+                    # A100: ~156 TFLOPS for bfloat16
+                    self.device_peak_flops = 156e12
+                else:
+                    # Conservative estimate for unknown GPUs
+                    self.device_peak_flops = 20e12
+            else:
+                self.device_peak_flops = 1e12  # CPU fallback
+        else:
+            self.device_peak_flops = device_peak_flops
+        
+        # Calculate model FLOPs per forward pass
+        self.model_flops = self._calculate_model_flops()
+        
+    def _calculate_model_flops(self):
+        """Calculate FLOPs for one forward pass of the model"""
+        config = self.model_config
+        
+        # Transformer FLOPs calculation
+        # Based on: https://github.com/karpathy/nanoGPT/blob/master/model.py
+        
+        N = config.n_layer
+        H = config.n_head  
+        D = config.n_embd
+        T = config.block_size
+        V = config.vocab_size
+        
+        # Attention FLOPs: 4 * N * H * T^2 * (D/H)
+        attention_flops = 4 * N * H * T * T * (D // H)
+        
+        # MLP FLOPs: 8 * N * T * D^2 (for typical 4*D hidden size)
+        mlp_flops = 8 * N * T * D * D
+        
+        # Embedding + output projection: 2 * T * D * V
+        embedding_flops = 2 * T * D * V
+        
+        # Layer norm is negligible
+        total_flops = attention_flops + mlp_flops + embedding_flops
+        
+        return total_flops
+    
+    def calculate_mfu(self, batch_size, seq_len, dt):
+        """Calculate MFU for a given batch and timing"""
+        if dt <= 0:
+            return 0.0
+            
+        # FLOPs for this batch (forward + backward ≈ 3x forward)
+        batch_flops = self.model_flops * batch_size * 3
+        
+        # Achieved FLOPS/s
+        achieved_flops_per_sec = batch_flops / dt
+        
+        # MFU = achieved / peak
+        mfu = achieved_flops_per_sec / self.device_peak_flops
+        
+        return min(mfu * 100, 100.0)  # Return as percentage, cap at 100%
+    
+    def get_optimization_hints(self, current_mfu, batch_size, seq_len):
+        """Provide optimization hints based on current MFU"""
+        hints = []
+        
+        if current_mfu < 20:
+            hints.append("🔴 Very low MFU - try increasing batch size")
+            if batch_size < 32:
+                hints.append(f"  → Increase batch_size from {batch_size} to {batch_size * 2}")
+        elif current_mfu < 35:
+            hints.append("🟡 Low MFU - room for improvement")
+            hints.append(f"  → Try batch_size {int(batch_size * 1.5)}")
+        elif current_mfu < 50:
+            hints.append("🟢 Good MFU - minor optimizations possible")
+        else:
+            hints.append("🚀 Excellent MFU!")
+            
+        if seq_len < 2048:
+            hints.append(f"  → Consider longer sequences ({seq_len} → {seq_len * 2})")
+            
+        return hints

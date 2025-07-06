@@ -40,15 +40,19 @@ logger = logging.getLogger(__name__)
 class Trainer:
     """Main training orchestrator"""
     
-    def __init__(self, config: Config, model: nn.Module, tokenizer: Any):
+    def __init__(self, config: Config, model: nn.Module, tokenizer: Any, output_checkpoint: Optional[str] = None):
         self.config = config
         self.model = model
         self.tokenizer = tokenizer
+        self.output_checkpoint = output_checkpoint
         
         # Initialize components
         self.metrics = MetricsTracker()
         self.shutdown_handler = GracefulShutdown()
         self.device = torch.device(config.system.device)
+        
+        # Determine device type early for use in other setup methods
+        self.device_type = 'cuda' if 'cuda' in config.system.device else 'cpu'
         
         # Training state
         self.epoch = 0
@@ -64,34 +68,40 @@ class Trainer:
         # Initialize optimizer and scheduler (needs data loaders)
         self._setup_optimizer_and_scheduler()
         
-        # Initialize mixed precision training
-        if 'cuda' in config.system.device:
+        # Initialize mixed precision training with correct device_type
+        if self.device_type == 'cuda':
             self.scaler = torch.amp.GradScaler('cuda', enabled=(config.system.dtype == 'float16'))
         else:
             self.scaler = torch.amp.GradScaler('cpu', enabled=(config.system.dtype == 'float16'))
         
-        # Autocast context
-        device_type = 'cuda' if 'cuda' in config.system.device else 'cpu'
+        # Autocast context - use nullcontext for CPU to avoid overhead
+        from contextlib import nullcontext
         dtype_map = {
             'float32': torch.float32,
             'bfloat16': torch.bfloat16,
             'float16': torch.float16
         }
-        self.autocast_ctx = torch.amp.autocast(
-            device_type=device_type,
-            dtype=dtype_map[config.system.dtype]
-        )
+        
+        if self.device_type == 'cpu':
+            # Use nullcontext for CPU to avoid autocast overhead
+            self.autocast_ctx = nullcontext()
+        else:
+            # Use autocast for GPU training
+            self.autocast_ctx = torch.amp.autocast(
+                device_type=self.device_type,
+                dtype=dtype_map[config.system.dtype]
+            )
         
         logger.info("Trainer initialized successfully")
     
     def _setup_optimizer_and_scheduler(self) -> None:
         """Initialize optimizer and learning rate scheduler"""
-        # Configure optimizer
+        # Configure optimizer - use correct device_type
         self.optimizer = self.model.configure_optimizers(
             self.config.optimizer.weight_decay,
             self.config.optimizer.learning_rate,
             (self.config.optimizer.beta1, self.config.optimizer.beta2),
-            'cuda' if 'cuda' in self.config.system.device else 'cpu'
+            self.device_type  # Use the device_type we computed
         )
         
         # Setup learning rate scheduler
@@ -122,13 +132,13 @@ class Trainer:
             f"{self.config.data.dataset_name}-val.jsonl"
         )
         
-        # Create data loaders
+        # Create data loaders - keep data on CPU for pin_memory optimization
         self.train_loader, self.val_loader = create_dataloaders(
             train_file, val_file, self.tokenizer,
             self.config.training.batch_size,
             self.config.model.block_size,
             self.config.data.cache_dir if self.config.data.cache_tokenized else None,
-            self.device
+            None  # Don't move to device here - we'll do it with pin_memory in training loop
         )
     
     def train_epoch(self) -> Dict[str, float]:
@@ -155,8 +165,16 @@ class Trainer:
             batch_idx += 1
             batch_start_time = time.time()
             
-            # Get batch data
+            # Get batch data and optimize transfer for CUDA
             X, Y = batch_data
+            
+            # Optimize data transfer for CUDA devices
+            if self.device_type == 'cuda' and self.config.system.pin_memory:
+                X = X.pin_memory().to(self.device, non_blocking=True)
+                Y = Y.pin_memory().to(self.device, non_blocking=True)
+            else:
+                X = X.to(self.device)
+                Y = Y.to(self.device)
             
             # Forward pass with gradient accumulation
             total_loss = 0.0
@@ -214,6 +232,23 @@ class Trainer:
                 # Generate plot every log_interval batches
                 #print(f"{Constants.CYAN}Generating plot at batch {self.batch_counter} (log_interval={self.config.training.log_interval}){Constants.ENDC}")
                 self._generate_training_plot(f"Training Progress - Batch {self.batch_counter}")
+            
+            # Save checkpoint at specified batch intervals (if configured)
+            if (self.config.training.checkpoint_interval > 0 and 
+                self.config.training.save_checkpoints and
+                self.batch_counter % self.config.training.checkpoint_interval == 0):
+                
+                # Use output_checkpoint if provided, otherwise use default naming
+                if self.output_checkpoint:
+                    checkpoint_path = self.output_checkpoint
+                else:
+                    # Default naming scheme
+                    checkpoint_path = f"models/{self.config.data.dataset_name}_batch{self.batch_counter}.pt"
+
+                print(f"\n{Constants.CYAN}Saving checkpoint at batch {self.batch_counter}... {checkpoint_path}{Constants.ENDC}")
+                
+                self.save_checkpoint(checkpoint_path, is_best=False)
+                print()  # Add newline after checkpoint save
             
             # Update running totals
             epoch_loss += total_loss
@@ -290,6 +325,14 @@ class Trainer:
             for i, (X, Y) in enumerate(loader):
                 if i >= eval_batches:
                     break
+                
+                # Optimize data transfer for CUDA devices
+                if self.device_type == 'cuda' and self.config.system.pin_memory:
+                    X = X.pin_memory().to(self.device, non_blocking=True)
+                    Y = Y.pin_memory().to(self.device, non_blocking=True)
+                else:
+                    X = X.to(self.device)
+                    Y = Y.to(self.device)
                 
                 with self.autocast_ctx:
                     logits, loss = self.model(X, Y)
@@ -372,19 +415,15 @@ class Trainer:
             logger.error(f"Failed to load checkpoint {filepath}: {e}")
             return False
     
-    def train(self, checkpoint_path: Optional[str] = None, 
-              resume_from: Optional[str] = None) -> Dict[str, Any]:
+    def train(self, checkpoint_path: Optional[str] = None, input_checkpoint: Optional[str] = None) -> Dict[str, Any]:
         """Main training loop"""
-        
-        # Load checkpoint if resuming
-        if resume_from:
-            if not self.load_checkpoint(resume_from, resume_training=True):
-                logger.error(f"Failed to load checkpoint for resuming: {resume_from}")
-                return {'success': False, 'error': 'Failed to load checkpoint'}
         
         # Training setup
         start_time = time.time()
         checkpoint_path = checkpoint_path or f"models/{self.config.data.dataset_name}_epoch{self.config.training.max_epochs}.pt"
+        
+        # Print comprehensive training summary
+        self.print_training_summary(checkpoint_path, input_checkpoint)
         
         logger.info(f"Starting training for {self.config.training.max_epochs} epochs")
         logger.info(f"Model parameters: {count_parameters(self.model):,}")
@@ -546,3 +585,88 @@ class Trainer:
                 
         except Exception as e:
             logger.warning(f"Error generating training plot: {e}")
+    
+    def print_training_summary(self, checkpoint_path: str, input_checkpoint: Optional[str] = None) -> None:
+        """Print comprehensive training summary before starting training"""
+        
+        # Calculate model size
+        total_params = count_parameters(self.model)
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        
+        # Calculate dataset info
+        train_conversations = len(self.train_loader.dataset.conversations)
+        val_conversations = len(self.val_loader.dataset.conversations)
+        train_tokens = self.train_loader.dataset.total_tokens
+        val_tokens = self.val_loader.dataset.total_tokens
+        
+        # Calculate training volume
+        batches_per_epoch = len(self.train_loader)
+        total_batches = batches_per_epoch * self.config.training.max_epochs
+        total_training_tokens = train_tokens * self.config.training.max_epochs
+        
+        # Print comprehensive summary
+        print(f"\n{Constants.BOLD}{Constants.BLUE}╔═══════════════════════════════════════════════════════╗{Constants.ENDC}")
+        print(f"{Constants.BOLD}{Constants.BLUE}║                  TRAINING SUMMARY                     ║{Constants.ENDC}")
+        print(f"{Constants.BOLD}{Constants.BLUE}╚═══════════════════════════════════════════════════════╝{Constants.ENDC}")
+        
+        # Model Information
+        print(f"{Constants.BOLD}{Constants.CYAN}📊 Model Configuration:{Constants.ENDC}")
+        print(f"   Architecture:       {Constants.GREEN}GPT-{self.config.model.n_layer}L-{self.config.model.n_head}H-{self.config.model.n_embd}D{Constants.ENDC}")
+        print(f"   Total Parameters:   {Constants.GREEN}{total_params:,}{Constants.ENDC} ({total_params/1e6:.1f}M)")
+        print(f"   Trainable Params:   {Constants.GREEN}{trainable_params:,}{Constants.ENDC} ({trainable_params/1e6:.1f}M)")
+        print(f"   Context Length:     {Constants.GREEN}{self.config.model.block_size:,} tokens{Constants.ENDC}")
+        print(f"   Vocabulary Size:    {Constants.GREEN}{self.config.model.vocab_size:,}{Constants.ENDC}")
+        print()
+        
+        # Dataset Information
+        print(f"{Constants.BOLD}{Constants.CYAN}📚 Dataset Information:{Constants.ENDC}")
+        print(f"   Dataset Name:       {Constants.GREEN}{self.config.data.dataset_name}{Constants.ENDC}")
+        print(f"   Training Set:       {Constants.GREEN}{train_conversations:,} conversations{Constants.ENDC} ({train_tokens:,} tokens)")
+        print(f"   Validation Set:     {Constants.GREEN}{val_conversations:,} conversations{Constants.ENDC} ({val_tokens:,} tokens)")
+        print(f"   Total Dataset:      {Constants.GREEN}{train_conversations + val_conversations:,} conversations{Constants.ENDC} ({train_tokens + val_tokens:,} tokens)")
+        print()
+        
+        # Training Schedule
+        print(f"{Constants.BOLD}{Constants.CYAN}🚀 Training Schedule:{Constants.ENDC}")
+        print(f"   Epochs to Train:    {Constants.GREEN}{self.config.training.max_epochs}{Constants.ENDC}")
+        print(f"   Batches per Epoch:  {Constants.GREEN}{batches_per_epoch:,}{Constants.ENDC}")
+        print(f"   Total Batches:      {Constants.GREEN}{total_batches:,}{Constants.ENDC}")
+        print(f"   Batch Size:         {Constants.GREEN}{self.config.training.batch_size}{Constants.ENDC}")
+        print(f"   Gradient Accum:     {Constants.GREEN}{self.config.training.gradient_accumulation_steps}{Constants.ENDC}")
+        print(f"   Effective Batch:    {Constants.GREEN}{self.config.training.batch_size * self.config.training.gradient_accumulation_steps}{Constants.ENDC}")
+        print(f"   Training Tokens:    {Constants.GREEN}{total_training_tokens:,}{Constants.ENDC}")
+        print()
+        
+        # Checkpoint Information
+        print(f"{Constants.BOLD}{Constants.CYAN}💾 Checkpoint Configuration:{Constants.ENDC}")
+        if input_checkpoint:
+            print(f"   Input Checkpoint:   {Constants.GREEN}{input_checkpoint}{Constants.ENDC}")
+            print(f"   Resume Training:    {Constants.GREEN}Yes{Constants.ENDC} (from epoch {self.epoch + 1})")
+        else:
+            print(f"   Input Checkpoint:   {Constants.YELLOW}None - Training from scratch{Constants.ENDC}")
+        print(f"   Output Checkpoint:  {Constants.GREEN}{checkpoint_path}{Constants.ENDC}")
+        if self.config.training.checkpoint_interval > 0:
+            print(f"   Save Interval:      {Constants.GREEN}Every {self.config.training.checkpoint_interval} batches{Constants.ENDC}")
+        else:
+            print(f"   Save Interval:      {Constants.GREEN}End of each epoch only{Constants.ENDC}")
+        print()
+        
+        # Training Configuration
+        print(f"{Constants.BOLD}{Constants.CYAN}⚙️  Training Configuration:{Constants.ENDC}")
+        print(f"   Learning Rate:      {Constants.GREEN}{self.config.optimizer.learning_rate:.1e}{Constants.ENDC}")
+        print(f"   Weight Decay:       {Constants.GREEN}{self.config.optimizer.weight_decay}{Constants.ENDC}")
+        print(f"   Gradient Clipping:  {Constants.GREEN}{self.config.optimizer.grad_clip}{Constants.ENDC}")
+        print(f"   Device:             {Constants.GREEN}{self.config.system.device}{Constants.ENDC}")
+        print(f"   Precision:          {Constants.GREEN}{self.config.system.dtype}{Constants.ENDC}")
+        print(f"   Model Compilation:  {Constants.GREEN}{'Enabled' if self.config.training.compile_model else 'Disabled'}{Constants.ENDC}")
+        print()
+        
+        # Evaluation Configuration
+        print(f"{Constants.BOLD}{Constants.CYAN}📈 Monitoring Configuration:{Constants.ENDC}")
+        print(f"   Eval Interval:      {Constants.GREEN}Every {self.config.training.eval_interval} batches{Constants.ENDC}")
+        print(f"   Log Interval:       {Constants.GREEN}Every {self.config.training.log_interval} batches{Constants.ENDC}")
+        print(f"   Eval Iterations:    {Constants.GREEN}{self.config.training.eval_iters}{Constants.ENDC}")
+        print()
+        
+        print(f"{Constants.BOLD}{Constants.GREEN}Ready to begin training!{Constants.ENDC}")
+        print(f"{Constants.YELLOW}{'='*55}{Constants.ENDC}\n")

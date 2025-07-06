@@ -1,6 +1,6 @@
 {
   "model": {
-    "n_layer": 12,
+    "n_layer": 16,
     "n_head": 12,
     "n_embd": 768,
     "block_size": 1024,
@@ -25,24 +25,23 @@
   },
   "training": {
     "max_epochs": 1,
-    "batch_size": 12,
-    "gradient_accumulation_steps": 40,
+    "batch_size": 24,
+    "gradient_accumulation_steps": 20,
     "eval_iters": 200,
-    "eval_interval": 20,
-    "log_interval": 10,
+    "eval_interval": 50,
+    "log_interval": 50,
     "save_checkpoints": true,
-    "checkpoint_interval": 20,
     "compile_model": true
   },
   "system": {
     "device": "cuda",
     "dtype": "bfloat16",
     "seed": 1337,
-    "num_workers": 8,
+    "num_workers": 16,
     "pin_memory": true
   },
   "data": {
-    "dataset_name": "chitchat",
+    "dataset_name": "story",
     "data_dir": "data/",
     "cache_tokenized": true,
     "cache_dir": "cache/"

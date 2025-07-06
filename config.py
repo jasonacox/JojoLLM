@@ -59,6 +59,7 @@ class TrainingConfig:
     eval_interval: int = 50
     log_interval: int = 50
     save_checkpoints: bool = True
+    checkpoint_interval: int = 0  # Save checkpoint every N batches (0 = only at epoch end)
     compile_model: bool = True
 
 
@@ -70,6 +71,12 @@ class SystemConfig:
     seed: int = 1337
     num_workers: int = 4
     pin_memory: bool = True
+    # Memory optimization settings
+    memory_fraction: float = 0.9  # CUDA memory fraction to use
+    optimize_memory: bool = True  # Enable memory optimizations
+    # TF32 optimization settings for modern GPUs
+    allow_tf32_matmul: bool = True  # Enable TF32 for matrix multiplications
+    allow_tf32_cudnn: bool = True   # Enable TF32 for cuDNN operations
 
 
 @dataclass
@@ -130,6 +137,8 @@ class Config:
             self.training.eval_interval = args.eval_interval
         if hasattr(args, 'log_interval') and args.log_interval is not None:
             self.training.log_interval = args.log_interval
+        if hasattr(args, 'checkpoint_interval') and args.checkpoint_interval is not None:
+            self.training.checkpoint_interval = args.checkpoint_interval
         if hasattr(args, 'seed') and args.seed is not None:
             self.system.seed = args.seed
 
@@ -164,8 +173,8 @@ def validate_config(config: Config) -> None:
 # Constants
 class Constants:
     # Version information
-    VERSION = "2.0.3"
-    VERSION_NAME = "PyTorch 2.6+ Compatibility"
+    VERSION = "2.1.0"
+    VERSION_NAME = "Complete Training System"
     
     DEFAULT_VOCAB_SIZE = 50304
     PROGRESS_BAR_LENGTH = 30

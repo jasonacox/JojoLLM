@@ -44,6 +44,8 @@ def parse_arguments():
                         help='How often to evaluate during training (in batches, default: use config file value)')
     parser.add_argument('--log_interval', type=int, default=None,
                         help='How often to log progress (in batches, default: use config file value)')
+    parser.add_argument('--checkpoint_interval', type=int, default=None,
+                        help='How often to save checkpoints during training (in batches, 0=only at epoch end, default: use config file value)')
     
     # System
     parser.add_argument('--device', type=str, default=None,
@@ -56,11 +58,15 @@ def parse_arguments():
     
     # Checkpoints
     parser.add_argument('--checkpoint', type=str, default=None,
-                        help='Path to checkpoint file to continue training from')
+                        help='Path to checkpoint file to load (automatically resumes training)')
+    parser.add_argument('--from_checkpoint', type=str, default=None,
+                        help='Alias for --checkpoint for backwards compatibility')
     parser.add_argument('--output_checkpoint', type=str, default=None,
                         help='Custom path to save output checkpoint')
     parser.add_argument('--resume', action='store_true',
-                        help='Resume training from checkpoint')
+                        help='Force resume training from checkpoint (deprecated - use --checkpoint instead)')
+    parser.add_argument('--load_model_only', action='store_true',
+                        help='Load only model weights from checkpoint, not training state')
     
     # Configuration
     parser.add_argument('--config', type=str, default=None,
@@ -314,6 +320,7 @@ def show_complete_config(config):
     print(f"  eval_interval:            {Constants.GREEN}{config.training.eval_interval}{Constants.ENDC}")
     print(f"  log_interval:             {Constants.GREEN}{config.training.log_interval}{Constants.ENDC}")
     print(f"  save_checkpoints:         {Constants.GREEN}{config.training.save_checkpoints}{Constants.ENDC}")
+    print(f"  checkpoint_interval:      {Constants.GREEN}{config.training.checkpoint_interval}{Constants.ENDC}")
     print(f"  compile_model:            {Constants.GREEN}{config.training.compile_model}{Constants.ENDC}")
     print()
     
@@ -324,6 +331,10 @@ def show_complete_config(config):
     print(f"  seed:              {Constants.GREEN}{config.system.seed}{Constants.ENDC}")
     print(f"  num_workers:       {Constants.GREEN}{config.system.num_workers}{Constants.ENDC}")
     print(f"  pin_memory:        {Constants.GREEN}{config.system.pin_memory}{Constants.ENDC}")
+    print(f"  memory_fraction:   {Constants.GREEN}{config.system.memory_fraction}{Constants.ENDC}")
+    print(f"  optimize_memory:   {Constants.GREEN}{config.system.optimize_memory}{Constants.ENDC}")
+    print(f"  allow_tf32_matmul: {Constants.GREEN}{config.system.allow_tf32_matmul}{Constants.ENDC}")
+    print(f"  allow_tf32_cudnn:  {Constants.GREEN}{config.system.allow_tf32_cudnn}{Constants.ENDC}")
     print()
     
     # Data Configuration
@@ -362,7 +373,7 @@ def main():
         # Print configuration
         print_training_config(config)
         
-        # Set random seed
+        # Set random seed for reproducibility
         import random
         import numpy as np
         random.seed(config.system.seed)
@@ -370,6 +381,18 @@ def main():
         torch.manual_seed(config.system.seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed(config.system.seed)
+            torch.cuda.manual_seed_all(config.system.seed)  # For multi-GPU setups
+            
+            # Enable TF32 optimizations for faster training on modern GPUs (RTX 30xx+)
+            if config.system.allow_tf32_matmul:
+                torch.backends.cuda.matmul.allow_tf32 = True
+                logger.info("TF32 matmul optimization enabled")
+                
+            if config.system.allow_tf32_cudnn:
+                torch.backends.cudnn.allow_tf32 = True
+                logger.info("TF32 cuDNN optimization enabled")
+        
+        logger.info(f"Random seed set to {config.system.seed}")
         
         # Setup tokenizer
         tokenizer = setup_tokenizer()
@@ -378,24 +401,43 @@ def main():
         model = setup_model(config)
         
         # Optimize device memory
-        DeviceManager.optimize_memory(config.system.device)
+        if config.system.optimize_memory:
+            DeviceManager.optimize_memory(config.system.device, config.system.memory_fraction)
         
         # Create trainer
-        trainer = Trainer(config, model, tokenizer)
+        trainer = Trainer(config, model, tokenizer, output_checkpoint=args.output_checkpoint)
+        
+        # Handle checkpoint loading
+        checkpoint_to_load = args.checkpoint or args.from_checkpoint
+        if checkpoint_to_load:
+            if os.path.exists(checkpoint_to_load):
+                print(f"{Constants.CYAN}Loading checkpoint: {checkpoint_to_load}{Constants.ENDC}")
+                resume_training = not args.load_model_only
+                if trainer.load_checkpoint(checkpoint_to_load, resume_training=resume_training):
+                    if resume_training:
+                        print(f"{Constants.GREEN}Checkpoint loaded successfully - resuming training from epoch {trainer.epoch + 1}{Constants.ENDC}")
+                    else:
+                        print(f"{Constants.GREEN}Model weights loaded successfully - starting fresh training{Constants.ENDC}")
+                else:
+                    print(f"{Constants.RED}Failed to load checkpoint: {checkpoint_to_load}{Constants.ENDC}")
+                    sys.exit(1)
+            else:
+                print(f"{Constants.RED}Checkpoint file not found: {checkpoint_to_load}{Constants.ENDC}")
+                sys.exit(1)
+        elif args.resume:
+            print(f"{Constants.YELLOW}Warning: --resume flag provided but no --checkpoint specified{Constants.ENDC}")
         
         # Determine checkpoint paths
         checkpoint_path = args.output_checkpoint
         if not checkpoint_path:
             checkpoint_path = f"models/{config.data.dataset_name}_epoch{config.training.max_epochs}.pt"
         
-        resume_from = args.checkpoint if args.resume else None
-        
         # Ensure output directory exists
         os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
         
         # Start training
         logger.info("Starting training...")
-        results = trainer.train(checkpoint_path=checkpoint_path, resume_from=resume_from)
+        results = trainer.train(checkpoint_path=checkpoint_path, input_checkpoint=checkpoint_to_load)
         
         if results['success']:
             # Training completed successfully
