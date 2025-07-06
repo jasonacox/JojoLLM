@@ -45,21 +45,25 @@ def split_stories(text):
     # TinyStories uses double newlines to separate stories
     stories = []
     
-    # Split by double newlines first
-    potential_stories = text.split('\n\n')
-    
+    # Split <|endoftext|>
+    potential_stories = text.split('<|endoftext|>')
+
     for story in potential_stories:
         story = story.strip()
         if story and len(story) > 20:  # Filter out very short entries
             # Clean up the story text
-            story = re.sub(r'\n+', ' ', story)  # Replace multiple newlines with space
-            story = re.sub(r'\s+', ' ', story)  # Replace multiple spaces with single space
+            # story = re.sub(r'\n+', ' ', story)  # Replace multiple newlines with space
+            #story = re.sub(r'\s+', ' ', story)  # Replace multiple spaces with single space
             story = story.strip()
             
             if story:
+                story += '\n'
                 # Add end of text token
                 if not story.endswith('<|endoftext|>'):
                     story += '<|endoftext|>'
+                # Add newline for consistency
+                if not story.endswith('\n'):
+                    story += '\n'
                 stories.append(story)
     
     return stories

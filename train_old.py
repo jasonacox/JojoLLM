@@ -543,7 +543,7 @@ def get_batch(split):
 # Initialize the model (either from scratch or from checkpoint)
 if args.checkpoint:
     print(f"{BOLD}{GREEN}Loading model from checkpoint: {args.checkpoint}{ENDC}")
-    checkpoint = torch.load(args.checkpoint, map_location=device)
+    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     model_args = checkpoint['model_args']
     # Initialize model with args from checkpoint
     gptconf = GPTConfig(**model_args)

@@ -166,12 +166,20 @@ def setup_model(checkpoint_file, device, seed, dtype, verbose=False):
     
     # Load model
     try:
-        checkpoint = torch.load(checkpoint_file, map_location=device, weights_only=True)
-        if 'model_args' not in checkpoint:
-            print(f"{RED}Error: Invalid checkpoint format. Missing 'model_args'.{ENDC}")
+        checkpoint = torch.load(checkpoint_file, map_location=device, weights_only=False)
+        
+        # Handle both old format (model_args) and new format (config)
+        if 'model_args' in checkpoint:
+            # Old format
+            model_config = checkpoint['model_args']
+        elif 'config' in checkpoint and 'model' in checkpoint['config']:
+            # New format
+            model_config = checkpoint['config']['model']
+        else:
+            print(f"{RED}Error: Invalid checkpoint format. Missing 'model_args' or 'config.model'.{ENDC}")
             sys.exit(1)
             
-        gptconf = GPTConfig(**checkpoint['model_args'])
+        gptconf = GPTConfig(**model_config)
         if verbose:
             print(f"{YELLOW}{gptconf}{ENDC}")
         else:

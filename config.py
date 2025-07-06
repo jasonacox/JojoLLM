@@ -118,19 +118,19 @@ class Config:
     
     def update_from_args(self, args) -> None:
         """Update configuration from command line arguments"""
-        if hasattr(args, 'dataset'):
+        if hasattr(args, 'dataset') and args.dataset is not None:
             self.data.dataset_name = args.dataset
-        if hasattr(args, 'epochs'):
+        if hasattr(args, 'epochs') and args.epochs is not None:
             self.training.max_epochs = args.epochs
-        if hasattr(args, 'batch_size'):
+        if hasattr(args, 'batch_size') and args.batch_size is not None:
             self.training.batch_size = args.batch_size
-        if hasattr(args, 'learning_rate'):
+        if hasattr(args, 'learning_rate') and args.learning_rate is not None:
             self.optimizer.learning_rate = args.learning_rate
-        if hasattr(args, 'eval_interval'):
+        if hasattr(args, 'eval_interval') and args.eval_interval is not None:
             self.training.eval_interval = args.eval_interval
-        if hasattr(args, 'log_interval'):
+        if hasattr(args, 'log_interval') and args.log_interval is not None:
             self.training.log_interval = args.log_interval
-        if hasattr(args, 'seed'):
+        if hasattr(args, 'seed') and args.seed is not None:
             self.system.seed = args.seed
 
 
@@ -164,8 +164,8 @@ def validate_config(config: Config) -> None:
 # Constants
 class Constants:
     # Version information
-    VERSION = "2.0.1"
-    VERSION_NAME = "Enhanced Loss Tracking"
+    VERSION = "2.0.3"
+    VERSION_NAME = "PyTorch 2.6+ Compatibility"
     
     DEFAULT_VOCAB_SIZE = 50304
     PROGRESS_BAR_LENGTH = 30

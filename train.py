@@ -30,29 +30,29 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Train a GPT model on various datasets')
     
     # Dataset and training
-    parser.add_argument('--dataset', type=str, default='chitchat',
-                        help='Dataset name to use for training (default: chitchat)')
-    parser.add_argument('--epochs', type=int, default=1,
-                        help='Number of epochs to train for (default: 1)')
-    parser.add_argument('--batch_size', type=int, default=12,
-                        help='Batch size for training (default: 12)')
-    parser.add_argument('--learning_rate', type=float, default=6e-4,
-                        help='Learning rate (default: 6e-4)')
+    parser.add_argument('--dataset', type=str, default=None,
+                        help='Dataset name to use for training (default: use config file value)')
+    parser.add_argument('--epochs', type=int, default=None,
+                        help='Number of epochs to train for (default: use config file value)')
+    parser.add_argument('--batch_size', type=int, default=None,
+                        help='Batch size for training (default: use config file value)')
+    parser.add_argument('--learning_rate', type=float, default=None,
+                        help='Learning rate (default: use config file value)')
     
     # Evaluation and logging
-    parser.add_argument('--eval_interval', type=int, default=50,
-                        help='How often to evaluate during training (in batches, default: 50)')
-    parser.add_argument('--log_interval', type=int, default=50,
-                        help='How often to log progress (in batches, default: 50)')
+    parser.add_argument('--eval_interval', type=int, default=None,
+                        help='How often to evaluate during training (in batches, default: use config file value)')
+    parser.add_argument('--log_interval', type=int, default=None,
+                        help='How often to log progress (in batches, default: use config file value)')
     
     # System
     parser.add_argument('--device', type=str, default=None,
                         help='Device to use (auto-detect if not specified)')
-    parser.add_argument('--seed', type=int, default=1337,
-                        help='Random seed for reproducibility (default: 1337)')
-    parser.add_argument('--dtype', type=str, default='bfloat16',
+    parser.add_argument('--seed', type=int, default=None,
+                        help='Random seed for reproducibility (default: use config file value)')
+    parser.add_argument('--dtype', type=str, default=None,
                         choices=['float32', 'bfloat16', 'float16'],
-                        help='Data type for training (default: bfloat16)')
+                        help='Data type for training (default: use config file value)')
     
     # Checkpoints
     parser.add_argument('--checkpoint', type=str, default=None,
@@ -67,6 +67,8 @@ def parse_arguments():
                         help='Path to configuration file')
     parser.add_argument('--save_config', type=str, default=None,
                         help='Save current configuration to file')
+    parser.add_argument('--show_config', action='store_true',
+                        help='Show complete configuration and exit')
     
     # Other options
     parser.add_argument('--no_cache', action='store_true',
@@ -150,17 +152,21 @@ def create_configuration(args):
     # Update configuration from command line arguments
     config.update_from_args(args)
     
-    # Override specific settings from args
+    # Override specific settings from args only if provided
     if args.device:
         config.system.device = args.device
     else:
         # Auto-detect best device
         config.system.device = DeviceManager.select_best_device()
     
-    config.system.dtype = args.dtype
-    config.system.seed = args.seed
-    config.data.cache_tokenized = not args.no_cache
-    config.training.compile_model = not args.no_compile
+    if args.dtype is not None:
+        config.system.dtype = args.dtype
+    if args.seed is not None:
+        config.system.seed = args.seed
+    if args.no_cache:
+        config.data.cache_tokenized = False
+    if args.no_compile:
+        config.training.compile_model = False
     
     # Validate configuration
     validate_config(config)
@@ -263,6 +269,72 @@ def print_training_config(config):
     print()
 
 
+def show_complete_config(config):
+    """Display complete configuration in a formatted way"""
+    print(f"{Constants.BOLD}{Constants.BLUE}╔═══════════════════════════════════════════════════════╗{Constants.ENDC}")
+    print(f"{Constants.BOLD}{Constants.BLUE}║                COMPLETE CONFIGURATION                 ║{Constants.ENDC}")
+    print(f"{Constants.BOLD}{Constants.BLUE}╚═══════════════════════════════════════════════════════╝{Constants.ENDC}")
+    
+    # Model Configuration
+    print(f"{Constants.BOLD}{Constants.CYAN}Model Configuration:{Constants.ENDC}")
+    print(f"  n_layer:           {Constants.GREEN}{config.model.n_layer}{Constants.ENDC}")
+    print(f"  n_head:            {Constants.GREEN}{config.model.n_head}{Constants.ENDC}")
+    print(f"  n_embd:            {Constants.GREEN}{config.model.n_embd}{Constants.ENDC}")
+    print(f"  block_size:        {Constants.GREEN}{config.model.block_size}{Constants.ENDC}")
+    print(f"  dropout:           {Constants.GREEN}{config.model.dropout}{Constants.ENDC}")
+    print(f"  bias:              {Constants.GREEN}{config.model.bias}{Constants.ENDC}")
+    print(f"  vocab_size:        {Constants.GREEN}{config.model.vocab_size}{Constants.ENDC}")
+    print()
+    
+    # Optimizer Configuration
+    print(f"{Constants.BOLD}{Constants.CYAN}Optimizer Configuration:{Constants.ENDC}")
+    print(f"  learning_rate:     {Constants.GREEN}{config.optimizer.learning_rate}{Constants.ENDC}")
+    print(f"  weight_decay:      {Constants.GREEN}{config.optimizer.weight_decay}{Constants.ENDC}")
+    print(f"  beta1:             {Constants.GREEN}{config.optimizer.beta1}{Constants.ENDC}")
+    print(f"  beta2:             {Constants.GREEN}{config.optimizer.beta2}{Constants.ENDC}")
+    print(f"  grad_clip:         {Constants.GREEN}{config.optimizer.grad_clip}{Constants.ENDC}")
+    print()
+    
+    # Scheduler Configuration
+    print(f"{Constants.BOLD}{Constants.CYAN}Scheduler Configuration:{Constants.ENDC}")
+    print(f"  decay_lr:          {Constants.GREEN}{config.scheduler.decay_lr}{Constants.ENDC}")
+    print(f"  warmup_iters:      {Constants.GREEN}{config.scheduler.warmup_iters}{Constants.ENDC}")
+    print(f"  lr_decay_iters:    {Constants.GREEN}{config.scheduler.lr_decay_iters}{Constants.ENDC}")
+    print(f"  min_lr:            {Constants.GREEN}{config.scheduler.min_lr}{Constants.ENDC}")
+    print(f"  warmup_fraction:   {Constants.GREEN}{config.scheduler.warmup_fraction}{Constants.ENDC}")
+    print(f"  cooldown_fraction: {Constants.GREEN}{config.scheduler.cooldown_fraction}{Constants.ENDC}")
+    print()
+    
+    # Training Configuration
+    print(f"{Constants.BOLD}{Constants.CYAN}Training Configuration:{Constants.ENDC}")
+    print(f"  max_epochs:               {Constants.GREEN}{config.training.max_epochs}{Constants.ENDC}")
+    print(f"  batch_size:               {Constants.GREEN}{config.training.batch_size}{Constants.ENDC}")
+    print(f"  gradient_accumulation_steps: {Constants.GREEN}{config.training.gradient_accumulation_steps}{Constants.ENDC}")
+    print(f"  eval_iters:               {Constants.GREEN}{config.training.eval_iters}{Constants.ENDC}")
+    print(f"  eval_interval:            {Constants.GREEN}{config.training.eval_interval}{Constants.ENDC}")
+    print(f"  log_interval:             {Constants.GREEN}{config.training.log_interval}{Constants.ENDC}")
+    print(f"  save_checkpoints:         {Constants.GREEN}{config.training.save_checkpoints}{Constants.ENDC}")
+    print(f"  compile_model:            {Constants.GREEN}{config.training.compile_model}{Constants.ENDC}")
+    print()
+    
+    # System Configuration
+    print(f"{Constants.BOLD}{Constants.CYAN}System Configuration:{Constants.ENDC}")
+    print(f"  device:            {Constants.GREEN}{config.system.device}{Constants.ENDC}")
+    print(f"  dtype:             {Constants.GREEN}{config.system.dtype}{Constants.ENDC}")
+    print(f"  seed:              {Constants.GREEN}{config.system.seed}{Constants.ENDC}")
+    print(f"  num_workers:       {Constants.GREEN}{config.system.num_workers}{Constants.ENDC}")
+    print(f"  pin_memory:        {Constants.GREEN}{config.system.pin_memory}{Constants.ENDC}")
+    print()
+    
+    # Data Configuration
+    print(f"{Constants.BOLD}{Constants.CYAN}Data Configuration:{Constants.ENDC}")
+    print(f"  dataset_name:      {Constants.GREEN}{config.data.dataset_name}{Constants.ENDC}")
+    print(f"  data_dir:          {Constants.GREEN}{config.data.data_dir}{Constants.ENDC}")
+    print(f"  cache_tokenized:   {Constants.GREEN}{config.data.cache_tokenized}{Constants.ENDC}")
+    print(f"  cache_dir:         {Constants.GREEN}{config.data.cache_dir}{Constants.ENDC}")
+    print()
+
+
 def main():
     """Main training function"""
     
@@ -281,6 +353,11 @@ def main():
     try:
         # Create configuration
         config = create_configuration(args)
+        
+        # Handle show config request
+        if args.show_config:
+            show_complete_config(config)
+            sys.exit(0)
         
         # Print configuration
         print_training_config(config)

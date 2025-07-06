@@ -97,6 +97,7 @@ class MetricsTracker:
             self.step_counters[name] += 1
         
         self.metrics[name].append((step, value))
+        #print(f"{Constants.YELLOW}Logged metric: {name} at step {step} with value {value}{Constants.ENDC}")
         
     def get_metric_history(self, name: str) -> List[Tuple[int, float]]:
         """Get full history of a metric"""
@@ -306,13 +307,26 @@ class PlotManager:
             matplotlib.use('Agg')  # Use non-interactive backend
             import matplotlib.pyplot as plt
             
-            # Get loss data (try different metric names)
-            train_losses = (metrics.get_metric_values('train_loss_epoch') or 
-                           metrics.get_metric_values('train_loss_eval') or 
-                           metrics.get_metric_values('train_loss'))
-            val_losses = (metrics.get_metric_values('val_loss_epoch') or 
-                         metrics.get_metric_values('val_loss_eval') or 
-                         metrics.get_metric_values('val_loss'))
+            # Get loss data (prioritize batch data for real-time training visualization)
+            # For training loss: prefer batch data > evaluation data > epoch data
+            train_losses = None
+            batch_losses = metrics.get_metric_values('train_loss_batch')
+            if batch_losses and len(batch_losses) > 10:  # Use batch data if we have enough points
+                # For frequent plotting during training, use all batch data (no smoothing needed for real-time view)
+                train_losses = batch_losses
+            else:
+                # Fallback to evaluation metrics if batch data is insufficient
+                train_losses = metrics.get_metric_values('train_loss_eval')
+                if not train_losses:
+                    epoch_losses = (metrics.get_metric_values('train_loss_epoch') or 
+                                   metrics.get_metric_values('train_loss'))
+                    train_losses = epoch_losses or batch_losses  # Use whatever we have
+            
+            # For validation loss: prefer evaluation data
+            val_losses = metrics.get_metric_values('val_loss_eval')
+            if not val_losses:
+                val_losses = (metrics.get_metric_values('val_loss_epoch') or 
+                             metrics.get_metric_values('val_loss'))
             
             if not train_losses and not val_losses:
                 return False
@@ -325,31 +339,53 @@ class PlotManager:
             
             if train_losses:
                 train_steps = list(range(len(train_losses)))
-                ax1.plot(train_steps, train_losses, label='Train Loss', color='blue', marker='.', alpha=0.7)
+                marker_style = '.' if len(train_losses) > 20 else 'o'
+                ax1.plot(train_steps, train_losses, label='Train Loss', color='blue', 
+                        marker=marker_style, alpha=0.7)
                 
                 # Add min value annotation
                 min_train_idx = train_losses.index(min(train_losses))
                 min_train_loss = train_losses[min_train_idx]
-                ax1.annotate(f'Min: {min_train_loss:.4f}', 
+                ax1.annotate(f'Min Train: {min_train_loss:.4f}', 
                            (min_train_idx, min_train_loss),
                            xytext=(10, -20),
                            textcoords='offset points',
                            arrowprops=dict(arrowstyle='->', color='blue', alpha=0.7))
             
             if val_losses:
-                val_steps = list(range(len(val_losses)))
-                ax1.plot(val_steps, val_losses, label='Val Loss', color='orange', marker='.', alpha=0.7)
+                # If we have fewer validation points than training points, spread them across the same x-range
+                if train_losses and len(val_losses) < len(train_losses):
+                    # Scale validation points to match training timeline
+                    max_train_step = len(train_losses) - 1
+                    if len(val_losses) == 1:
+                        val_steps = [max_train_step]  # Put single val point at the end
+                    else:
+                        val_steps = [int(i * max_train_step / (len(val_losses) - 1)) for i in range(len(val_losses))]
+                else:
+                    val_steps = list(range(len(val_losses)))
+                
+                marker_style = '.' if len(val_losses) > 20 else 's'
+                ax1.plot(val_steps, val_losses, label='Val Loss', color='orange', 
+                        marker=marker_style, alpha=0.7, markersize=8)
                 
                 # Add min value annotation
                 min_val_idx = val_losses.index(min(val_losses))
                 min_val_loss = val_losses[min_val_idx]
-                ax1.annotate(f'Min: {min_val_loss:.4f}', 
-                           (min_val_idx, min_val_loss),
+                actual_x = val_steps[min_val_idx]
+                ax1.annotate(f'Min Val: {min_val_loss:.4f}', 
+                           (actual_x, min_val_loss),
                            xytext=(10, 20),
                            textcoords='offset points',
                            arrowprops=dict(arrowstyle='->', color='orange', alpha=0.7))
             
-            ax1.set_xlabel('Evaluation Step')
+            # Set appropriate labels based on data type
+            batch_losses = metrics.get_metric_values('train_loss_batch')
+            if train_losses and train_losses == batch_losses and len(train_losses) > 10:
+                ax1.set_xlabel('Batch Number')
+            elif train_losses and len(train_losses) > 50:
+                ax1.set_xlabel('Training Step')
+            else:
+                ax1.set_xlabel('Step')
             ax1.set_ylabel('Loss')
             ax1.set_title(title)
             ax1.legend(loc='upper right')

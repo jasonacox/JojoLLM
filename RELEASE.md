@@ -1,5 +1,70 @@
 # Jojo LLM Training Script - Release Notes
 
+## Version 2.0.3 "PyTorch 2.6+ Compatibility" - July 5, 2025
+
+### 🔧 **PyTorch Compatibility Fixes**
+
+#### **Fixed PyTorch 2.6+ Checkpoint Loading**
+- **Issue**: PyTorch 2.6+ changed default `weights_only=True` in `torch.load()`, causing checkpoint loading failures
+- **Error**: `"Weights only load failed"` and `"Unsupported global: GLOBAL torch.torch_version.TorchVersion"`
+- **Solution**: Updated all checkpoint loading calls to explicitly use `weights_only=False` for trusted checkpoint files
+- **Files Updated**: 
+  - `gen.py` - Text generation checkpoint loading
+  - `trainer.py` - Training checkpoint restoration  
+  - `train_old.py` - Legacy training script
+  - `regenerate_plot.py` - Already correctly implemented
+
+#### **Enhanced Checkpoint Format Compatibility**
+- **Issue**: New training system uses `config.model` structure vs old `model_args` format
+- **Solution**: Updated `gen.py` to handle both checkpoint formats automatically:
+  1. **New format**: `checkpoint['config']['model']` (current training system)
+  2. **Old format**: `checkpoint['model_args']` (legacy compatibility)
+- **Benefits**: Seamless generation from checkpoints created by any version of the training system
+
+#### **Improved Error Messages**
+- **Before**: Generic "Missing model_args" error
+- **After**: Clear indication of expected formats: "Missing 'model_args' or 'config.model'"
+- **User Experience**: Better guidance for troubleshooting checkpoint format issues
+
+#### **Testing Verified**
+- ✅ Text generation working with new checkpoint format
+- ✅ All checkpoint loading operations compatible with PyTorch 2.6+
+- ✅ Backward compatibility maintained for older checkpoints
+
+---
+
+## Version 2.0.2 "Improved Loss Plotting" - July 5, 2025
+
+### 🔧 **Plotting System Fixes**
+
+#### **Fixed Loss Curve Visualization Issue**
+- **Issue**: Loss curve plots only showed one data point for train and validation loss
+- **Root Cause**: Plotting logic prioritized epoch-level metrics (1 point) over available batch-level data (hundreds of points)
+- **Solution**: Enhanced plotting algorithm with intelligent data source selection:
+  1. **First Priority**: Use evaluation metrics (`train_loss_eval`, `val_loss_eval`) when available
+  2. **Smart Fallback**: For training loss, use smoothed batch-level data when epoch data has ≤2 points
+  3. **Validation Handling**: Gracefully handle single validation points by positioning them appropriately on timeline
+
+#### **Enhanced Plot Quality**
+- **Batch Data Smoothing**: When using batch-level training loss, automatically smooth to ~100 points for cleaner visualization
+- **Axis Alignment**: Single validation points are positioned at the end of training timeline for proper context
+- **Visual Improvements**: 
+  - Different markers for different data densities (dots for dense data, squares for sparse)
+  - Clearer axis labels indicating data type ("Training Step (Smoothed)" vs "Step")
+  - Improved annotations with "Min Train" and "Min Val" labels
+
+#### **Backward Compatibility**
+- **Existing Checkpoints**: All existing checkpoints with limited metrics now generate proper curves
+- **Future Training**: New training runs with evaluation intervals will use optimal evaluation data
+- **Data Preference**: System automatically selects best available data source without user intervention
+
+#### **Technical Details**
+- Plotting now handles datasets with missing evaluation metrics (common in older checkpoints)
+- Smoothing algorithm: `smooth_interval = max(1, len(batch_losses) // 100)`
+- Validation point positioning: Single points placed at `max_train_step` for context
+
+---
+
 ## Version 2.0.1 "Enhanced Loss Tracking" - July 5, 2025
 
 ### 🐛 **Bug Fixes & Improvements**
@@ -204,8 +269,8 @@ This modular architecture provides the foundation for future improvements:
 
 ## Version Information
 
-- **Current Version**: 2.0.1 "Enhanced Loss Tracking"
-- **Previous Version**: 2.0.0 "Modular Architecture"
+- **Current Version**: 2.0.3 "PyTorch 2.6+ Compatibility"
+- **Previous Version**: 2.0.2 "Improved Loss Plotting"
 - **Original Version**: 1.0.0 (Original Implementation)
 - **Release Date**: July 5, 2025
 - **Compatibility**: PyTorch 2.0+, Python 3.8+

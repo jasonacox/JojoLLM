@@ -201,13 +201,19 @@ class Trainer:
                 )
                 running_mfu = mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
             
-            # Track metrics (only log detailed metrics at specified intervals)
-            if self.config.training.log_interval > 0 and batch_idx % self.config.training.log_interval == 0:
-                self.metrics.log_metric('train_loss_batch', total_loss, self.batch_counter)
+            # Track metrics - Log training loss at every batch for plotting
+            self.metrics.log_metric('train_loss_batch', total_loss, self.batch_counter)
+            
+            # Log additional metrics at specified intervals to avoid overwhelming logs
+            if self.config.training.log_interval > 0 and self.batch_counter % self.config.training.log_interval == 0:
                 self.metrics.log_metric('learning_rate', current_lr, self.batch_counter)
                 self.metrics.log_metric('samples_per_sec', samples_per_sec, self.batch_counter)
                 if running_mfu > 0:
                     self.metrics.log_metric('mfu', running_mfu, self.batch_counter)
+                
+                # Generate plot every log_interval batches
+                #print(f"{Constants.CYAN}Generating plot at batch {self.batch_counter} (log_interval={self.config.training.log_interval}){Constants.ENDC}")
+                self._generate_training_plot(f"Training Progress - Batch {self.batch_counter}")
             
             # Update running totals
             epoch_loss += total_loss
@@ -245,7 +251,7 @@ class Trainer:
                 if eval_results['train'] > self.worst_train_loss:
                     self.worst_train_loss = eval_results['train']
                 
-                # Record evaluation metrics
+                # Record evaluation metrics - Log at every evaluation for plotting
                 self.metrics.log_metric('train_loss_eval', eval_results['train'], self.batch_counter)
                 self.metrics.log_metric('val_loss_eval', eval_results['val'], self.batch_counter)
         
@@ -336,7 +342,7 @@ class Trainer:
     def load_checkpoint(self, filepath: str, resume_training: bool = True) -> bool:
         """Load training checkpoint"""
         try:
-            checkpoint = torch.load(filepath, map_location=self.device)
+            checkpoint = torch.load(filepath, map_location=self.device, weights_only=False)
             
             # Load model state
             self.model.load_state_dict(checkpoint['model'])
@@ -519,3 +525,24 @@ class Trainer:
                 
         except Exception as e:
             logger.warning(f"Error generating loss curve plot: {e}")
+    
+    def _generate_training_plot(self, title: str) -> None:
+        """Generate training plot during training (not just at checkpoints)"""
+        try:
+            # Create plot filename - use a consistent name that gets overwritten
+            # Only save milestone plots every 100 batches to avoid too many files
+            dataset_name = self.config.data.dataset_name
+            
+            plot_path = f"models/{dataset_name}.png"
+            
+            # Generate the plot
+            from utils import PlotManager
+            success = PlotManager.plot_training_curves(self.metrics, plot_path, title)
+            
+            if success:
+                logger.info(f"Training plot saved: {plot_path}")
+            else:
+                logger.warning("Could not generate training plot")
+                
+        except Exception as e:
+            logger.warning(f"Error generating training plot: {e}")
