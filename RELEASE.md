@@ -1,6 +1,6 @@
 # Jojo LLM Training Script - Release Notes
 
-## Version 2.1.0 "Complete Training System" - July 5, 2025
+## Version 2.1.0 "Complete Training System" - July 6, 2025
 
 ### 🎉 **Major Feature Release: Enhanced Training System**
 
@@ -80,12 +80,19 @@ This release completes the modular training system refactor with comprehensive P
 - **Default Behavior**: checkpoint_interval=0 saves only at epoch end (backward compatible)
 - **Long Training Support**: Essential for multi-day training runs
 - **Progress Preservation**: Never lose more than checkpoint_interval batches of progress
+- **Custom Checkpoint Paths**: Batch interval checkpoints now respect `--output_checkpoint` parameter for consistent naming
 
 **Enhanced Checkpoint Loading**
 - **`--checkpoint`**: Always loads checkpoint with full state restoration
 - **`--load_model_only`**: Load only model weights (useful for inference setup)
 - **Improved Logic**: Clear distinction between full checkpoint restore vs model-only loading
 - **Error Handling**: Better error messages for checkpoint loading issues
+
+**Smart Checkpoint Naming**
+- **Consistent Paths**: When `--output_checkpoint` is specified, batch checkpoints use the same base path
+- **Automatic Suffixes**: Batch interval checkpoints automatically append batch numbers
+- **Fallback Naming**: Uses default dataset-based naming when no output path specified
+- **Path Management**: Intelligent handling of .pt extensions and path construction
 
 #### **📈 Training Summary & Monitoring**
 
@@ -201,6 +208,8 @@ python upload_to_huggingface.py models/my_model.pt \
 - **Logging System**: Structured logging with appropriate verbosity levels
 - **Code Quality**: Full type hints and documentation throughout
 - **Model Distribution**: Professional-grade Hugging Face integration for model sharing
+- **Checkpoint Path Management**: Enhanced trainer architecture with configurable output paths
+- **Flexible Training Control**: Improved trainer initialization with optional parameters
 
 ### 📝 **Documentation Updates**
 
@@ -484,7 +493,7 @@ This modular architecture provides the foundation for future improvements:
 - **Current Version**: 2.1.0 "Complete Training System"
 - **Previous Version**: 2.0.3 "PyTorch 2.6+ Compatibility"
 - **Original Version**: 1.0.0 (Original Implementation)
-- **Release Date**: July 5, 2025
+- **Release Date**: July 6, 2025
 - **Compatibility**: PyTorch 2.0+, Python 3.8+
 
 ## Quick Migration to v2.1.0
@@ -501,6 +510,10 @@ python train.py --config configs/story-small.json --show_config
 
 # Use batch-interval checkpointing (every 50 batches)
 python train.py --dataset chitchat --checkpoint_interval 50
+
+# Use custom checkpoint path with batch interval saving
+python train.py --dataset chitchat --checkpoint_interval 20 \
+  --output_checkpoint models/my_custom_model.pt
 
 # Load only model weights (no optimizer state)
 python train.py --load_model_only models/model.pt --epochs 1
