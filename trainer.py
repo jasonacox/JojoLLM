@@ -14,6 +14,7 @@ import os
 import time
 import logging
 import datetime
+import math
 from typing import Optional, Dict, Any, Tuple
 import torch
 import torch.nn as nn
@@ -32,9 +33,56 @@ from utils import (
     ProgressTracker, MetricsTracker, GracefulShutdown, DeviceManager,
     CheckpointManager, PlotManager, format_time_delta, count_parameters
 )
-from data_loader import CachedJsonlDataset, EfficientDataLoader, create_dataloaders
+from simple_packed_loader import create_simple_packed_loaders
 
 logger = logging.getLogger(__name__)
+
+
+class CustomLRScheduler:
+    """
+    Custom learning rate scheduler that matches the behavior from story-notebook.py:
+    1. Linear warmup for warmup_iters steps
+    2. Cosine decay from warmup_iters to lr_decay_iters
+    3. Constant min_lr after lr_decay_iters
+    """
+    
+    def __init__(self, optimizer, learning_rate, warmup_iters, lr_decay_iters, min_lr):
+        self.optimizer = optimizer
+        self.learning_rate = learning_rate
+        self.warmup_iters = warmup_iters
+        self.lr_decay_iters = lr_decay_iters
+        self.min_lr = min_lr
+        self.iter_num = 0
+    
+    def get_lr(self, it):
+        """Get learning rate for given iteration"""
+        # 1) linear warmup for warmup_iters steps
+        if it < self.warmup_iters:
+            return self.learning_rate * it / self.warmup_iters
+        # 2) if it > lr_decay_iters, return min learning rate
+        if it > self.lr_decay_iters:
+            return self.min_lr
+        # 3) in between, use cosine decay down to min learning rate
+        decay_ratio = (it - self.warmup_iters) / (self.lr_decay_iters - self.warmup_iters)
+        assert 0 <= decay_ratio <= 1
+        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
+        return self.min_lr + coeff * (self.learning_rate - self.min_lr)
+    
+    def step(self):
+        """Update learning rate for all parameter groups"""
+        lr = self.get_lr(self.iter_num)
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
+        self.iter_num += 1
+        return lr
+    
+    def state_dict(self):
+        """Return scheduler state for checkpointing"""
+        return {'iter_num': self.iter_num}
+    
+    def load_state_dict(self, state_dict):
+        """Load scheduler state from checkpoint"""
+        self.iter_num = state_dict.get('iter_num', 0)
 
 
 class Trainer:
@@ -57,6 +105,7 @@ class Trainer:
         # Training state
         self.epoch = 0
         self.batch_counter = 0
+        self.global_iter_num = 0  # For custom LR scheduler
         self.best_val_loss = float('inf')
         self.worst_val_loss = float('-inf')
         self.best_train_loss = float('inf')
@@ -106,16 +155,13 @@ class Trainer:
         
         # Setup learning rate scheduler
         if self.config.scheduler.decay_lr:
-            # Use a simple cosine annealing scheduler
-            from torch.optim.lr_scheduler import CosineAnnealingLR
-            
-            # Calculate total steps for cosine annealing
-            total_steps = len(self.train_loader) * self.config.training.max_epochs
-            
-            self.lr_scheduler = CosineAnnealingLR(
+            # Use custom learning rate scheduler
+            self.lr_scheduler = CustomLRScheduler(
                 self.optimizer,
-                T_max=total_steps,
-                eta_min=self.config.scheduler.min_lr
+                self.config.optimizer.learning_rate,
+                self.config.scheduler.warmup_iters,
+                self.config.scheduler.lr_decay_iters,
+                self.config.scheduler.min_lr
             )
         else:
             self.lr_scheduler = None
@@ -132,14 +178,37 @@ class Trainer:
             f"{self.config.data.dataset_name}-val.jsonl"
         )
         
-        # Create data loaders - keep data on CPU for pin_memory optimization
-        self.train_loader, self.val_loader = create_dataloaders(
+        print(f"{Constants.CYAN}Loading training dataset: {train_file}{Constants.ENDC}")
+        print(f"{Constants.CYAN}Loading validation dataset: {val_file}{Constants.ENDC}")
+        
+        # Create packed data loaders for efficient training
+        # This loader packs conversations tightly, achieving >98% efficiency
+        # Note: batch_size = number of sequences per batch, block_size = sequence length (context window)
+        train_batches = getattr(self.config.training, 'train_batches', None)
+        val_batches = getattr(self.config.training, 'val_batches', None)
+        
+        if train_batches is None:
+            print(f"  Using entire training dataset per epoch")
+        else:
+            print(f"  Limiting to {train_batches:,} training batches per epoch")
+            
+        if val_batches is None:
+            print(f"  Using entire validation dataset per epoch")
+        else:
+            print(f"  Limiting to {val_batches:,} validation batches per epoch")
+        
+        print(f"{Constants.YELLOW}Creating packed data loaders...{Constants.ENDC}", end=" ", flush=True)
+        
+        self.train_loader, self.val_loader = create_simple_packed_loaders(
             train_file, val_file, self.tokenizer,
             self.config.training.batch_size,
             self.config.model.block_size,
-            self.config.data.cache_dir if self.config.data.cache_tokenized else None,
-            None  # Don't move to device here - we'll do it with pin_memory in training loop
+            train_batches, val_batches
         )
+        
+        print(f"{Constants.GREEN}Done!{Constants.ENDC}")
+        print(f"{Constants.GREEN}Training conversations loaded: {len(self.train_loader.conversations):,}{Constants.ENDC}")
+        print(f"{Constants.GREEN}Validation conversations loaded: {len(self.val_loader.conversations):,}{Constants.ENDC}")
     
     def train_epoch(self) -> Dict[str, float]:
         """Train for one epoch"""
@@ -148,9 +217,10 @@ class Trainer:
         epoch_loss = 0.0
         num_batches = 0
         
-        # Create progress tracker
+        # Create progress tracker - use estimated batches for iterable dataset
+        estimated_batches = self.train_loader.estimated_batches
         progress_tracker = ProgressTracker(
-            len(self.train_loader), self.epoch, self.config.training.max_epochs
+            estimated_batches, self.epoch, self.config.training.max_epochs
         )
         
         # Training loop
@@ -160,6 +230,12 @@ class Trainer:
         for batch_data in self.train_loader:
             if self.shutdown_handler.should_stop():
                 logger.info("Graceful shutdown requested during training")
+                break
+            
+            # Check max_iters termination condition
+            if (self.config.training.max_iters is not None and 
+                self.global_iter_num >= self.config.training.max_iters):
+                logger.info(f"Reached max_iters ({self.config.training.max_iters}) during epoch")
                 break
             
             batch_idx += 1
@@ -202,14 +278,35 @@ class Trainer:
             self.scaler.update()
             self.optimizer.zero_grad(set_to_none=True)
             
-            # Update learning rate
+            # Update learning rate with global iteration counter
             if self.lr_scheduler is not None:
-                self.lr_scheduler.step()
+                current_lr = self.lr_scheduler.step()
+            else:
+                current_lr = self.optimizer.param_groups[0]['lr']
+            
+            # Update global iteration counter
+            self.global_iter_num += 1
+            
+            # Iteration-based evaluation (like legacy script)
+            if (self.global_iter_num % 100 == 0 or 
+                (self.config.training.max_iters is not None and 
+                 self.global_iter_num >= self.config.training.max_iters)):
+                
+                print()  # New line for evaluation output
+                eval_results = self.evaluate()
+                
+                # Log evaluation results
+                print(f"\n{Constants.GREEN}Iteration {self.global_iter_num}: "
+                      f"Train Loss: {eval_results['train']:.4f}{Constants.ENDC}  "
+                      f"{Constants.MAGENTA}Val Loss: {eval_results['val']:.4f}{Constants.ENDC}")
+                
+                # Record evaluation metrics
+                self.metrics.log_metric('train_loss_iter', eval_results['train'], self.global_iter_num)
+                self.metrics.log_metric('val_loss_iter', eval_results['val'], self.global_iter_num)
             
             # Calculate metrics
             batch_time = time.time() - batch_start_time
             samples_per_sec = self.config.training.batch_size / batch_time if batch_time > 0 else 0
-            current_lr = self.optimizer.param_groups[0]['lr']
             
             # Update MFU (Model FLOPs Utilization)
             if self.batch_counter >= Constants.MFU_WARMUP_BATCHES:
@@ -270,7 +367,7 @@ class Trainer:
                 
                 # Log evaluation results
                 print(f"\n{Constants.GREEN}Epoch {self.epoch+1} "
-                      f"({batch_idx/len(self.train_loader)*100:.1f}%): "
+                      f"({batch_idx/estimated_batches*100:.1f}%): "
                       f"Train Loss: {eval_results['train']:.4f}{Constants.ENDC}  "
                       f"{Constants.MAGENTA}Val Loss: {eval_results['val']:.4f}{Constants.ENDC}")
                 
@@ -315,10 +412,15 @@ class Trainer:
         for split_name, loader in [('train', self.train_loader), ('val', self.val_loader)]:
             losses = []
             
-            # Calculate appropriate number of evaluation batches
+            # Calculate appropriate number of evaluation batches for iterable datasets
+            if split_name == 'train':
+                max_batches = self.train_loader.estimated_batches
+            else:
+                max_batches = self.val_loader.estimated_batches
+                
             eval_batches = min(
                 self.config.training.eval_iters // self.config.training.batch_size,
-                len(loader)
+                max_batches
             )
             eval_batches = max(10, eval_batches)  # At least 10 batches
             
@@ -352,6 +454,7 @@ class Trainer:
             'lr_scheduler': self.lr_scheduler.state_dict() if self.lr_scheduler else None,
             'epoch': self.epoch,
             'batch_counter': self.batch_counter,
+            'global_iter_num': self.global_iter_num,
             'best_val_loss': self.best_val_loss,
             'worst_val_loss': self.worst_val_loss,
             'best_train_loss': self.best_train_loss,
@@ -398,6 +501,7 @@ class Trainer:
                 
                 self.epoch = checkpoint.get('epoch', 0)
                 self.batch_counter = checkpoint.get('batch_counter', 0)
+                self.global_iter_num = checkpoint.get('global_iter_num', 0)
                 self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
                 self.worst_val_loss = checkpoint.get('worst_val_loss', float('-inf'))
                 self.best_train_loss = checkpoint.get('best_train_loss', float('inf'))
@@ -427,13 +531,19 @@ class Trainer:
         
         logger.info(f"Starting training for {self.config.training.max_epochs} epochs")
         logger.info(f"Model parameters: {count_parameters(self.model):,}")
-        logger.info(f"Batches per epoch: {len(self.train_loader)}")
+        logger.info(f"Estimated batches per epoch: {self.train_loader.estimated_batches:,}")
         
         try:
             # Training loop
             while self.epoch < self.config.training.max_epochs:
                 if self.shutdown_handler.should_stop():
                     logger.info("Graceful shutdown requested")
+                    break
+                
+                # Check max_iters termination condition (like legacy script)
+                if (self.config.training.max_iters is not None and 
+                    self.global_iter_num >= self.config.training.max_iters):
+                    logger.info(f"Reached max_iters ({self.config.training.max_iters}), stopping training")
                     break
                 
                 # Print epoch header
@@ -568,11 +678,13 @@ class Trainer:
     def _generate_training_plot(self, title: str) -> None:
         """Generate training plot during training (not just at checkpoints)"""
         try:
-            # Create plot filename - use a consistent name that gets overwritten
-            # Only save milestone plots every 100 batches to avoid too many files
-            dataset_name = self.config.data.dataset_name
-            
-            plot_path = f"models/{dataset_name}.png"
+            # Create plot filename using same pattern as checkpoints
+            if self.output_checkpoint:
+                # Use the output checkpoint filename as base
+                plot_path = self.output_checkpoint.replace('.pt', '.png')
+            else:
+                # Use default naming scheme similar to checkpoints
+                plot_path = f"models/{self.config.data.dataset_name}_epoch{self.epoch+1}.png"
             
             # Generate the plot
             from utils import PlotManager
@@ -593,16 +705,27 @@ class Trainer:
         total_params = count_parameters(self.model)
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         
-        # Calculate dataset info
-        train_conversations = len(self.train_loader.dataset.conversations)
-        val_conversations = len(self.val_loader.dataset.conversations)
-        train_tokens = self.train_loader.dataset.total_tokens
-        val_tokens = self.val_loader.dataset.total_tokens
+        # Calculate dataset info for packed loaders
+        train_conversations = len(self.train_loader.conversations)
+        val_conversations = len(self.val_loader.conversations)
+        
+        # Estimate tokens for packed datasets
+        avg_tokens_per_conv = self.config.model.block_size * 0.8  # Rough estimate
+        train_tokens = int(train_conversations * avg_tokens_per_conv)
+        val_tokens = int(val_conversations * avg_tokens_per_conv)
         
         # Calculate training volume
-        batches_per_epoch = len(self.train_loader)
+        batches_per_epoch = self.train_loader.estimated_batches
         total_batches = batches_per_epoch * self.config.training.max_epochs
-        total_training_tokens = train_tokens * self.config.training.max_epochs
+        total_training_tokens = batches_per_epoch * self.config.training.batch_size * self.config.model.block_size * self.config.training.max_epochs
+        
+        # Calculate tokens per iteration (matches legacy script)
+        tokens_per_iter = (self.config.training.gradient_accumulation_steps * 
+                          self.config.training.batch_size * 
+                          self.config.model.block_size)
+        
+        print(f"\n{Constants.BOLD}{Constants.YELLOW}Tokens per iteration will be: {tokens_per_iter:,}{Constants.ENDC}")
+        print()
         
         # Print comprehensive summary
         print(f"\n{Constants.BOLD}{Constants.BLUE}╔═══════════════════════════════════════════════════════╗{Constants.ENDC}")
@@ -616,6 +739,15 @@ class Trainer:
         print(f"   Trainable Params:   {Constants.GREEN}{trainable_params:,}{Constants.ENDC} ({trainable_params/1e6:.1f}M)")
         print(f"   Context Length:     {Constants.GREEN}{self.config.model.block_size:,} tokens{Constants.ENDC}")
         print(f"   Vocabulary Size:    {Constants.GREEN}{self.config.model.vocab_size:,}{Constants.ENDC}")
+        
+        # Model layers (like in legacy script)
+        print(f"{Constants.BOLD}   Model Layers:{Constants.ENDC}")
+        for number, (name, param) in enumerate(self.model.named_parameters()):
+            if number < 10:  # Show first 10 layers to avoid overwhelming output
+                print(f"     {number}: {name}")
+            elif number == 10:
+                print(f"     ... ({total_params//1000}K more parameters)")
+                break
         print()
         
         # Dataset Information

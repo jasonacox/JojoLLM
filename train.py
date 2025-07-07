@@ -33,9 +33,11 @@ def parse_arguments():
     parser.add_argument('--dataset', type=str, default=None,
                         help='Dataset name to use for training (default: use config file value)')
     parser.add_argument('--epochs', type=int, default=None,
-                        help='Number of epochs to train for (default: use config file value)')
+                        help='Number of training epochs')
+    parser.add_argument('--max_iters', type=int, default=None,
+                        help='Maximum training iterations (overrides epochs if set)')
     parser.add_argument('--batch_size', type=int, default=None,
-                        help='Batch size for training (default: use config file value)')
+                        help='Batch size')
     parser.add_argument('--learning_rate', type=float, default=None,
                         help='Learning rate (default: use config file value)')
     
@@ -46,6 +48,12 @@ def parse_arguments():
                         help='How often to log progress (in batches, default: use config file value)')
     parser.add_argument('--checkpoint_interval', type=int, default=None,
                         help='How often to save checkpoints during training (in batches, 0=only at epoch end, default: use config file value)')
+    
+    # Packed data loader parameters
+    parser.add_argument('--train_batches', type=int, default=None,
+                        help='Number of training batches per epoch for packed loader (default: use config file value)')
+    parser.add_argument('--val_batches', type=int, default=None,
+                        help='Number of validation batches per epoch for packed loader (default: use config file value)')
     
     # System
     parser.add_argument('--device', type=str, default=None,

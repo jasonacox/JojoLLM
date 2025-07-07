@@ -53,14 +53,18 @@ class SchedulerConfig:
 class TrainingConfig:
     """Training loop configuration"""
     max_epochs: int = 1
-    batch_size: int = 12
-    gradient_accumulation_steps: int = 40
+    max_iters: int = None  # Maximum iterations (overrides epochs if set)
+    batch_size: int = 12                    # Number of sequences per batch
+    gradient_accumulation_steps: int = 40   # Effective batch = batch_size * gradient_accumulation_steps
     eval_iters: int = 200
     eval_interval: int = 50
     log_interval: int = 50
     save_checkpoints: bool = True
     checkpoint_interval: int = 0  # Save checkpoint every N batches (0 = only at epoch end)
     compile_model: bool = True
+    # Packed data loader settings - None means use entire dataset per epoch
+    train_batches: int = None  # Number of batches per epoch for training (None = entire dataset)
+    val_batches: int = None    # Number of batches per epoch for validation (None = entire dataset)
 
 
 @dataclass
@@ -129,6 +133,8 @@ class Config:
             self.data.dataset_name = args.dataset
         if hasattr(args, 'epochs') and args.epochs is not None:
             self.training.max_epochs = args.epochs
+        if hasattr(args, 'max_iters') and args.max_iters is not None:
+            self.training.max_iters = args.max_iters
         if hasattr(args, 'batch_size') and args.batch_size is not None:
             self.training.batch_size = args.batch_size
         if hasattr(args, 'learning_rate') and args.learning_rate is not None:
@@ -139,6 +145,10 @@ class Config:
             self.training.log_interval = args.log_interval
         if hasattr(args, 'checkpoint_interval') and args.checkpoint_interval is not None:
             self.training.checkpoint_interval = args.checkpoint_interval
+        if hasattr(args, 'train_batches') and args.train_batches is not None:
+            self.training.train_batches = args.train_batches
+        if hasattr(args, 'val_batches') and args.val_batches is not None:
+            self.training.val_batches = args.val_batches
         if hasattr(args, 'seed') and args.seed is not None:
             self.system.seed = args.seed
 

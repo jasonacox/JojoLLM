@@ -55,7 +55,7 @@ def split_stories(text):
             # story = re.sub(r'\n+', ' ', story)  # Replace multiple newlines with space
             #story = re.sub(r'\s+', ' ', story)  # Replace multiple spaces with single space
             story = story.strip()
-            
+
             if story:
                 story += '\n'
                 # Add end of text token
