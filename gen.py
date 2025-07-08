@@ -252,6 +252,9 @@ def process_prompt(prompt, device, use_extended=True, verbose=False):
     # Only show prompt in verbose mode
     if verbose:
         print(f"{BLUE}Prompt:{ENDC} {repr(prompt)}")
+    else:
+        # Print the prompt to help match the output with the input
+        print(f"{BLUE}{prompt}{ENDC}", end='', flush=True)
     try:
         # Always use allowed_special="all" to handle special tokens
         start_ids = enc.encode(prompt, allowed_special="all")
