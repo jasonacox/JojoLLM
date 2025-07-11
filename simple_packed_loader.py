@@ -152,7 +152,7 @@ class SimplePackedDataset(IterableDataset):
                     # Extract conversation text
                     if 'conversation' in data:
                         # ChatML format
-                        text = ""
+                        text = "\n"
                         for turn in data['conversation']:
                             role = turn.get('role', 'user')
                             content = turn.get('content', '')
@@ -161,11 +161,11 @@ class SimplePackedDataset(IterableDataset):
                     
                     elif 'text' in data:
                         # Plain text
-                        text = data['text'] + "\n\n"
+                        text = "\n" + data['text'] + "\n\n"
                     
                     elif 'input' in data and 'output' in data:
                         # Input/output format
-                        text = f"<|im_start|>user\n{data['input']}<|im_end|>\n<|im_start|>assistant\n{data['output']}<|im_end|>\n<|endoftext|>"
+                        text = f"\n<|im_start|>user\n{data['input']}<|im_end|>\n<|im_start|>assistant\n{data['output']}<|im_end|>\n<|endoftext|>"
                     
                     else:
                         continue
@@ -247,10 +247,10 @@ class SimplePackedDataset(IterableDataset):
             Y = torch.cat([X[:, 1:], X[:, :1]], dim=1)  # Shift by 1 for next token prediction
             
             # debug output
-            if batch_idx < 3:
-                print(f"\nBatch {batch_idx + 1}:")
-                print(f"  X shape: {X.shape}, Y shape: {Y.shape}")
-                print(f"  X converted to text:\n{self.tokenizer.decode(X[0].tolist())}\n")
+            #if batch_idx < 3:
+            #    print(f"\nBatch {batch_idx + 1}:")
+            #    print(f"  X shape: {X.shape}, Y shape: {Y.shape}")
+            #    print(f"  X converted to text:\n{self.tokenizer.decode(X[0].tolist())}\n")
             yield X, Y
 
 

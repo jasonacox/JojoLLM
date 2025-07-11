@@ -99,3 +99,4 @@ dailydialog/
 models/
 sandbox/
 tmp/empatheticdialogues/
+train-old.log

@@ -11,6 +11,23 @@ This project aims to build a large language model (LLM) from scratch, inspired b
 - Incrementally add more diverse and educational data.
 - Grow the model’s capabilities for language understanding and interaction.
 
+## HuggingFace Test
+
+```python
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
+
+# Load model and tokenizer
+model = GPT2LMHeadModel.from_pretrained("jasonacox/jojo-124M")
+tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+
+# Generate text
+input_text = "\n"
+inputs = tokenizer.encode(input_text, return_tensors="pt")
+outputs = model.generate(inputs, max_length=100, num_return_sequences=1, temperature=0.7)
+generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+print(generated_text)
+```
+
 ## Setup
 
 1. **Create a Python virtual environment:**

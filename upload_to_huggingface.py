@@ -139,66 +139,98 @@ class JojoToHuggingFaceConverter:
             bos_token_id=50256,
             eos_token_id=50256,
             return_dict=True,
+            # Handle tie_word_embeddings for weight tying
+            tie_word_embeddings=True,  # Jojo uses weight tying by default
         )
         
-        self.logger.info(f"Created Hugging Face config: {hf_config}")
+        self.logger.info(f"Created Hugging Face config: vocab_size={hf_config.vocab_size}, "
+                        f"n_layer={hf_config.n_layer}, n_embd={hf_config.n_embd}, "
+                        f"tie_word_embeddings={hf_config.tie_word_embeddings}")
         return hf_config
     
     def convert_state_dict(self, jojo_state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Convert Jojo state dict to Hugging Face format"""
         
-        hf_state_dict = {}
+        self.logger.info("Converting Jojo state dict to Hugging Face format...")
+        self.logger.debug(f"Jojo state dict keys: {list(jojo_state_dict.keys())}")
         
-        # Mapping from Jojo parameter names to HF parameter names
-        name_mapping = {
-            # Token embeddings
+        hf_state_dict = {}
+        unmapped_keys = set(jojo_state_dict.keys())
+        
+        # Helper function to clean key names (remove _orig_mod. prefix if present)
+        def clean_key(key):
+            if key.startswith('_orig_mod.'):
+                return key[10:]  # Remove '_orig_mod.' prefix
+            return key
+        
+        # Create clean mapping of Jojo keys
+        clean_jojo_dict = {}
+        for key, value in jojo_state_dict.items():
+            clean_key_name = clean_key(key)
+            clean_jojo_dict[clean_key_name] = value
+        
+        self.logger.debug(f"Clean Jojo state dict keys: {list(clean_jojo_dict.keys())}")
+        
+        # Direct mapping for exact matches (using clean keys)
+        direct_mapping = {
             'transformer.wte.weight': 'transformer.wte.weight',
             'transformer.wpe.weight': 'transformer.wpe.weight',
-            
-            # Layer norm
             'transformer.ln_f.weight': 'transformer.ln_f.weight',
-            'transformer.ln_f.bias': 'transformer.ln_f.bias',
-            
-            # LM head
-            'lm_head.weight': 'lm_head.weight',
         }
         
-        # Handle transformer blocks
-        for key, value in jojo_state_dict.items():
-            if key.startswith('transformer.h.'):
-                # Extract layer number and parameter name
-                parts = key.split('.')
-                layer_num = parts[2]  # transformer.h.{layer_num}.{param}
-                param_path = '.'.join(parts[3:])  # {param}
-                
-                # Map parameter names within each layer
-                layer_mapping = {
-                    'ln_1.weight': f'transformer.h.{layer_num}.ln_1.weight',
-                    'ln_1.bias': f'transformer.h.{layer_num}.ln_1.bias',
-                    'attn.c_attn.weight': f'transformer.h.{layer_num}.attn.c_attn.weight',
-                    'attn.c_attn.bias': f'transformer.h.{layer_num}.attn.c_attn.bias',
-                    'attn.c_proj.weight': f'transformer.h.{layer_num}.attn.c_proj.weight',
-                    'attn.c_proj.bias': f'transformer.h.{layer_num}.attn.c_proj.bias',
-                    'ln_2.weight': f'transformer.h.{layer_num}.ln_2.weight',
-                    'ln_2.bias': f'transformer.h.{layer_num}.ln_2.bias',
-                    'mlp.c_fc.weight': f'transformer.h.{layer_num}.mlp.c_fc.weight',
-                    'mlp.c_fc.bias': f'transformer.h.{layer_num}.mlp.c_fc.bias',
-                    'mlp.c_proj.weight': f'transformer.h.{layer_num}.mlp.c_proj.weight',
-                    'mlp.c_proj.bias': f'transformer.h.{layer_num}.mlp.c_proj.bias',
-                }
-                
-                if param_path in layer_mapping:
-                    hf_state_dict[layer_mapping[param_path]] = value
-                else:
-                    # Fallback: use original name
-                    hf_state_dict[key] = value
-            elif key in name_mapping:
-                hf_state_dict[name_mapping[key]] = value
-            else:
-                # For any unmapped parameters, use original name
-                hf_state_dict[key] = value
+        # Handle direct mappings
+        converted_count = 0
+        for hf_name, jojo_clean_name in direct_mapping.items():
+            if jojo_clean_name in clean_jojo_dict:
+                hf_state_dict[hf_name] = clean_jojo_dict[jojo_clean_name].clone()
+                converted_count += 1
+                self.logger.debug(f"Mapped {jojo_clean_name} -> {hf_name}")
+                # Remove from unmapped keys
+                for orig_key in jojo_state_dict.keys():
+                    if clean_key(orig_key) == jojo_clean_name:
+                        unmapped_keys.discard(orig_key)
         
-        self.logger.info(f"Converted {len(jojo_state_dict)} parameters to {len(hf_state_dict)} HF parameters")
+        # Handle weight tying: lm_head shares weights with wte
+        if 'transformer.wte.weight' in clean_jojo_dict:
+            hf_state_dict['lm_head.weight'] = clean_jojo_dict['transformer.wte.weight'].clone()
+            self.logger.debug("Applied weight tying: transformer.wte.weight -> lm_head.weight")
+        elif 'lm_head.weight' in clean_jojo_dict:
+            # Fallback if lm_head is separate (but Jojo uses weight tying)
+            hf_state_dict['lm_head.weight'] = clean_jojo_dict['lm_head.weight'].clone()
+            converted_count += 1
+            self.logger.debug("Mapped lm_head.weight directly")
+            for orig_key in jojo_state_dict.keys():
+                if clean_key(orig_key) == 'lm_head.weight':
+                    unmapped_keys.discard(orig_key)
+        
+        # Handle transformer blocks (with proper weight transposition)
+        for orig_key, value in jojo_state_dict.items():
+            clean_key_name = clean_key(orig_key)
+            if clean_key_name.startswith('transformer.h.'):
+                # Determine if this weight needs transposition
+                if ('attn.c_attn.weight' in clean_key_name or 
+                    'attn.c_proj.weight' in clean_key_name or
+                    'mlp.c_fc.weight' in clean_key_name or 
+                    'mlp.c_proj.weight' in clean_key_name):
+                    # These linear layer weights need to be transposed
+                    # Jojo: [out_features, in_features] -> HF: [in_features, out_features]
+                    hf_state_dict[clean_key_name] = value.clone().transpose(0, 1)
+                    self.logger.debug(f"Mapped and transposed: {clean_key_name} from {value.shape} to {value.transpose(0, 1).shape}")
+                else:
+                    # Layer norm weights don't need transposition
+                    hf_state_dict[clean_key_name] = value.clone()
+                    self.logger.debug(f"Mapped transformer block: {clean_key_name}")
+                
+                converted_count += 1
+                unmapped_keys.discard(orig_key)
+        
+        self.logger.info(f"Converted {len(jojo_state_dict)} -> {converted_count} parameters")
+        
+        if unmapped_keys:
+            self.logger.warning(f"Unmapped Jojo parameters: {unmapped_keys}")
+        
+        return hf_state_dict
+        
         return hf_state_dict
     
     def convert_model(self, checkpoint_path: str, output_dir: str) -> Dict[str, Any]:
@@ -218,16 +250,27 @@ class JojoToHuggingFaceConverter:
         
         # Load converted weights
         try:
-            hf_model.load_state_dict(hf_state_dict, strict=False)
-            self.logger.info("Successfully loaded converted weights into HF model")
-        except Exception as e:
-            self.logger.warning(f"Error loading weights (non-critical): {e}")
-            # Try loading with strict=False
+            # First try strict loading
             missing_keys, unexpected_keys = hf_model.load_state_dict(hf_state_dict, strict=False)
+            
             if missing_keys:
-                self.logger.warning(f"Missing keys: {missing_keys}")
+                self.logger.warning(f"Missing keys in HF model: {missing_keys}")
             if unexpected_keys:
-                self.logger.warning(f"Unexpected keys: {unexpected_keys}")
+                self.logger.warning(f"Unexpected keys in converted state dict: {unexpected_keys}")
+            
+            # Check if critical weights loaded correctly
+            critical_weights = ['transformer.wte.weight', 'transformer.wpe.weight', 'lm_head.weight']
+            for weight_name in critical_weights:
+                if weight_name in missing_keys:
+                    self.logger.error(f"Critical weight missing: {weight_name}")
+                else:
+                    self.logger.debug(f"Successfully loaded: {weight_name}")
+            
+            self.logger.info("Successfully loaded converted weights into HF model")
+            
+        except Exception as e:
+            self.logger.error(f"Error loading weights: {e}")
+            raise e
         
         # Create output directory
         os.makedirs(output_dir, exist_ok=True)
@@ -236,6 +279,9 @@ class JojoToHuggingFaceConverter:
         hf_model.save_pretrained(output_dir)
         self.logger.info(f"Saved HF model to {output_dir}")
         
+        # Validate the converted model
+        self._validate_converted_model(hf_model, hf_config, output_dir)
+        
         return {
             'model_config': checkpoint_data['model_config'],
             'training_config': checkpoint_data['training_config'],
@@ -243,6 +289,38 @@ class JojoToHuggingFaceConverter:
             'metrics': checkpoint_data['metrics'],
             'hf_config': hf_config
         }
+    
+    def _validate_converted_model(self, hf_model, hf_config, output_dir):
+        """Validate that the converted model works correctly"""
+        try:
+            self.logger.info("Validating converted model...")
+            
+            # Test forward pass
+            import torch
+            test_input = torch.randint(0, hf_config.vocab_size, (1, 10))
+            
+            with torch.no_grad():
+                outputs = hf_model(test_input)
+                logits = outputs.logits
+                
+            self.logger.info(f"Model validation successful. Output shape: {logits.shape}")
+            
+            # Check for NaN or infinite values
+            if torch.isnan(logits).any():
+                self.logger.error("Model outputs contain NaN values!")
+            elif torch.isinf(logits).any():
+                self.logger.error("Model outputs contain infinite values!")
+            else:
+                self.logger.info("Model outputs are valid (no NaN/inf)")
+                
+            # Test that the model can generate reasonable probability distributions
+            probs = torch.softmax(logits[0, -1], dim=-1)
+            top_probs, top_indices = torch.topk(probs, 5)
+            self.logger.info(f"Top 5 token probabilities: {top_probs.tolist()}")
+            
+        except Exception as e:
+            self.logger.error(f"Model validation failed: {e}")
+            # Don't raise - validation failure shouldn't stop the conversion
 
 class ModelCardGenerator:
     """Generate comprehensive model cards for Hugging Face"""
@@ -299,6 +377,10 @@ class ModelCardGenerator:
                 vocab_size * n_embd  # LM head
             )
         
+        # Format vocabulary size with commas if it's a number
+        vocab_size = model_config.get('vocab_size', 'N/A')
+        vocab_size_str = f"{vocab_size:,}" if isinstance(vocab_size, (int, float)) else str(vocab_size)
+        
         model_card = f"""---
 language: en
 license: mit
@@ -347,7 +429,7 @@ model-index:
 - **Hidden Size**: {model_config.get('n_embd', 'N/A')}
 - **Attention Heads**: {model_config.get('n_head', 'N/A')}
 - **Context Length**: {model_config.get('block_size', 'N/A')} tokens
-- **Vocabulary Size**: {model_config.get('vocab_size', 'N/A'):,}
+- **Vocabulary Size**: {vocab_size_str} tokens
 - **Total Parameters**: {f"{total_params/1e6:.1f}M" if total_params else "N/A"}
 
 ## Training Details
@@ -481,15 +563,22 @@ class HuggingFaceUploader:
             url = create_repo(
                 repo_id=full_repo_name,
                 private=private,
-                repo_type="model"
+                repo_type="model",
+                exist_ok=True  # Allow overwriting existing repos
             )
             self.logger.info(f"Created repository: {full_repo_name}")
             return full_repo_name
         except Exception as e:
-            if "already exists" in str(e).lower():
-                self.logger.info(f"Repository {full_repo_name} already exists")
+            # Check for various "already exists" error messages
+            error_msg = str(e).lower()
+            if any(phrase in error_msg for phrase in [
+                "already exists", "already created", "conflict", 
+                "you already created this model repo"
+            ]):
+                self.logger.info(f"Repository {full_repo_name} already exists - will overwrite")
                 return full_repo_name
             else:
+                self.logger.error(f"Failed to create repository: {e}")
                 raise e
     
     def upload_model(self, local_dir: str, repo_name: str, 
@@ -504,15 +593,34 @@ class HuggingFaceUploader:
                 folder_path=local_dir,
                 repo_id=repo_name,
                 repo_type="model",
-                commit_message=commit_message
+                commit_message=commit_message,
+                ignore_patterns=["*.git*", "*.DS_Store", "__pycache__/*"]
             )
             
             self.logger.info(f"Successfully uploaded model to: https://huggingface.co/{repo_name}")
             return url
             
         except Exception as e:
-            self.logger.error(f"Failed to upload model: {e}")
-            raise e
+            error_msg = str(e)
+            if "conflict" in error_msg.lower() or "409" in error_msg:
+                self.logger.warning(f"Repository conflict detected. Attempting to overwrite...")
+                try:
+                    # Try uploading again with force
+                    url = upload_folder(
+                        folder_path=local_dir,
+                        repo_id=repo_name,
+                        repo_type="model",
+                        commit_message=f"{commit_message} (overwrite)",
+                        ignore_patterns=["*.git*", "*.DS_Store", "__pycache__/*"]
+                    )
+                    self.logger.info(f"Successfully overwrote model at: https://huggingface.co/{repo_name}")
+                    return url
+                except Exception as retry_error:
+                    self.logger.error(f"Failed to overwrite model: {retry_error}")
+                    raise retry_error
+            else:
+                self.logger.error(f"Failed to upload model: {e}")
+                raise e
 
 def main():
     """Main function"""
@@ -533,6 +641,8 @@ def main():
                        default="gpt2", help="Tokenizer type to use")
     parser.add_argument("--dry-run", action="store_true",
                        help="Convert model but don't upload")
+    parser.add_argument("--overwrite", action="store_true",
+                       help="Overwrite existing repository if it exists")
     parser.add_argument("--debug", action="store_true",
                        help="Enable debug logging")
     parser.add_argument("--commit-message", type=str, 
@@ -601,6 +711,21 @@ def main():
         else:
             # Create repository and upload
             logger.info(f"{CYAN}Step 4: Creating Hugging Face repository...{ENDC}")
+            if not args.overwrite:
+                # Check if repo exists and warn user
+                try:
+                    from huggingface_hub import repo_exists
+                    repo_name_to_check = f"{args.organization}/{args.repo_name}" if args.organization else args.repo_name
+                    if repo_exists(repo_name_to_check, repo_type="model"):
+                        logger.warning(f"Repository {repo_name_to_check} already exists!")
+                        overwrite_choice = input(f"{YELLOW}Do you want to overwrite it? (y/N): {ENDC}")
+                        if overwrite_choice.lower() != 'y':
+                            logger.info("Upload cancelled by user")
+                            sys.exit(0)
+                except ImportError:
+                    # If repo_exists is not available, proceed anyway
+                    pass
+            
             full_repo_name = uploader.create_repository(
                 args.repo_name, args.private, args.organization
             )

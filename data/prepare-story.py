@@ -3,25 +3,72 @@
 Jojo LLM Data Preparation - TinyStories Dataset
 
 This script downloads and prepares the TinyStories dataset for training.
-It downloads the dataset files if they don't exist, converts them to JSONL format
-where each line contains a story as a JSON object with "text" field.
+It downloads the dataset files if they don't exist, normalizes text characters,
+and saves the tokenized data as binary files for efficient loading.
 
 Author: Jason A. Cox
-2025 July 4
+2025 June 28
 https://github.com/jasonacox/jojo
 """
 import os
-import json
 import requests
+import tiktoken
 import numpy as np
 from tqdm import tqdm
 import sys
-import re
+import unicodedata
 
 # Free up memory
 valid_data = None
 train_data = None
+train_ids = None
+val_ids = None
 
+def normalize_text(text):
+    """
+    Normalize text by replacing problematic characters with standard equivalents.
+    Based on analysis of TinyStoriesV2 dataset.
+    """
+    # Character replacement map based on dataset analysis
+    replacements = {
+        # Smart quotes to standard quotes
+        '"': '"',    # LEFT DOUBLE QUOTATION MARK
+        '"': '"',    # RIGHT DOUBLE QUOTATION MARK
+        ''': "'",    # LEFT SINGLE QUOTATION MARK
+        ''': "'",    # RIGHT SINGLE QUOTATION MARK
+        
+        # Dashes to standard hyphen
+        '–': '-',    # EN DASH
+        '—': '-',    # EM DASH
+        
+        # Ellipsis to three dots
+        '…': '...',  # HORIZONTAL ELLIPSIS
+        
+        # Problematic control characters (found in dataset)
+        '\x92': "'", # Unknown control char (likely apostrophe)
+        '\x93': '"', # Unknown control char (likely quote)
+        '\x94': '"', # Unknown control char (likely quote)
+    }
+    
+    # Apply character replacements
+    for old_char, new_char in replacements.items():
+        text = text.replace(old_char, new_char)
+    
+    # Normalize accented characters (é → e, ñ → n, etc.)
+    text = unicodedata.normalize('NFD', text)
+    normalized_chars = []
+    
+    for char in text:
+        # Skip combining marks (accents, diacriticals)
+        if unicodedata.category(char) != 'Mn':
+            normalized_chars.append(char)
+    
+    text = ''.join(normalized_chars)
+    
+    # Ensure we only have ASCII characters (safety check)
+    text = text.encode('ascii', 'ignore').decode('ascii')
+    
+    return text
 
 def download_if_missing(input_file_path, data_url):
     """Download a file from data_url if it doesn't exist at input_file_path"""
@@ -38,76 +85,8 @@ def download_if_missing(input_file_path, data_url):
                         pbar.update(len(chunk))
         print(f"Downloaded {input_file_path}.")
 
-
-def split_stories(text):
-    """Split text into individual stories"""
-    # Stories are typically separated by double newlines or specific markers
-    # TinyStories uses double newlines to separate stories
-    stories = []
-    
-    # Split <|endoftext|>
-    potential_stories = text.split('<|endoftext|>')
-
-    for story in potential_stories:
-        story = story.strip()
-        if story and len(story) > 20:  # Filter out very short entries
-            # Clean up the story text
-            # story = re.sub(r'\n+', ' ', story)  # Replace multiple newlines with space
-            #story = re.sub(r'\s+', ' ', story)  # Replace multiple spaces with single space
-            story = story.strip()
-
-            if story:
-                story += '\n'
-                # Add end of text token
-                if not story.endswith('<|endoftext|>'):
-                    story += '<|endoftext|>'
-                # Add newline for consistency
-                if not story.endswith('\n'):
-                    story += '\n'
-                stories.append(story)
-    
-    return stories
-
-
-def save_stories_to_jsonl(stories, output_file):
-    """Save stories to JSONL format"""
-    print(f"Saving {len(stories):,} stories to {output_file}...")
-    
-    with open(output_file, 'w', encoding='utf-8') as f:
-        for story in tqdm(stories, desc="Writing stories", ncols=80):
-            json_obj = {"text": story}
-            f.write(json.dumps(json_obj, ensure_ascii=False) + '\n')
-    
-    print(f"Saved {len(stories):,} stories to {output_file}")
-
-
-def print_dataset_stats(stories, dataset_name):
-    """Print statistics about the dataset"""
-    if not stories:
-        return
-    
-    story_lengths = [len(story) for story in stories]
-    total_chars = sum(story_lengths)
-    
-    print(f"\n{dataset_name} Dataset Statistics:")
-    print(f"  - Total stories: {len(stories):,}")
-    print(f"  - Total characters: {total_chars:,}")
-    print(f"  - Average story length: {total_chars / len(stories):.1f} characters")
-    print(f"  - Shortest story: {min(story_lengths)} characters")
-    print(f"  - Longest story: {max(story_lengths)} characters")
-    
-    # Show a sample story
-    if stories:
-        print(f"\nSample story:")
-        sample = stories[len(stories)//2]  # Middle story
-        if len(sample) > 200:
-            print(f"  {sample[:200]}...")
-        else:
-            print(f"  {sample}")
-
-
 def main():
-    print("\n=== Jojo LLM Data Preparation - TinyStories Dataset (JSONL Format) ===\n")
+    print("\n=== Jojo LLM Data Preparation - TinyStories Dataset ===\n")
 
     # URLs
     train_url = "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStoriesV2-GPT4-train.txt"
@@ -133,6 +112,27 @@ def main():
         print(f"Loading: {valid_file}...")
         with open(valid_file, 'r', encoding='utf-8') as f:
             valid_data = f.read()
+            
+        # Normalize text characters
+        print("Normalizing training data characters...")
+        train_data_normalized = normalize_text(train_data)
+        print("Normalizing validation data characters...")
+        valid_data_normalized = normalize_text(valid_data)
+        
+        # Check if normalization made changes
+        train_changes = len(train_data) - len(train_data_normalized)
+        valid_changes = len(valid_data) - len(valid_data_normalized)
+        
+        if train_changes > 0 or valid_changes > 0:
+            print(f"Character normalization complete:")
+            print(f"  Training data: {train_changes} characters normalized")
+            print(f"  Validation data: {valid_changes} characters normalized")
+        else:
+            print("No character normalization needed - text is clean!")
+            
+        # Use normalized data
+        train_data = train_data_normalized
+        valid_data = valid_data_normalized
     except UnicodeDecodeError:
         print(f"Error: There was an issue with the text encoding. Trying Latin-1 encoding...")
         try:
@@ -140,6 +140,14 @@ def main():
                 train_data = f.read()
             with open(valid_file, 'r', encoding='latin-1') as f:
                 valid_data = f.read()
+                
+            # Normalize text characters (especially important for Latin-1)
+            print("Normalizing training data characters...")
+            train_data = normalize_text(train_data)
+            print("Normalizing validation data characters...")
+            valid_data = normalize_text(valid_data)
+            print("Character normalization complete (Latin-1 encoding)")
+            
         except Exception as e:
             print(f"Error: Unable to read the data files: {str(e)}")
             sys.exit(1)
@@ -147,44 +155,37 @@ def main():
         print(f"Error: Unable to read the data files: {str(e)}")
         sys.exit(1)
 
-    # Split into individual stories
-    print("\nProcessing training data...")
-    train_stories = split_stories(train_data)
-    
-    print("Processing validation data...")
-    valid_stories = split_stories(valid_data)
-    
-    # Print statistics
-    print_dataset_stats(train_stories, "Training")
-    print_dataset_stats(valid_stories, "Validation")
-    
-    # Save to JSONL format
+    # Encode with tiktoken gpt2
     try:
-        train_jsonl = os.path.join(script_dir, 'story-train.jsonl')
-        val_jsonl = os.path.join(script_dir, 'story-val.jsonl')
-        
-        save_stories_to_jsonl(train_stories, train_jsonl)
-        save_stories_to_jsonl(valid_stories, val_jsonl)
-        
-        print(f"\nJSONL files saved:")
-        print(f"  - {train_jsonl}")
-        print(f"  - {val_jsonl}")
-        print(f"\nPreparation complete! You can now train your model with:")
-        print(f"  python train.py --dataset story --epochs 1")
-        
-        # Clean up old binary files if they exist
-        old_files = [
-            os.path.join(script_dir, 'story-train.bin'),
-            os.path.join(script_dir, 'story-val.bin')
-        ]
-        
-        for old_file in old_files:
-            if os.path.exists(old_file):
-                print(f"\nNote: Found old binary file {old_file}")
-                print("The new training system uses JSONL format. You can delete the old .bin files.")
-        
+        enc = tiktoken.get_encoding("gpt2")
+        print("Encoding training data...")
+        train_ids = enc.encode(train_data, allowed_special="all")
+        print("Encoding validation data...")
+        val_ids = enc.encode(valid_data, allowed_special="all")
+        print()
+        print(f"Train data: {len(train_ids):,} tokens")
+        print(f"Validation data: {len(val_ids):,} tokens")
     except Exception as e:
-        print(f"Error saving JSONL files: {str(e)}")
+        print(f"Error during encoding: {str(e)}")
+        sys.exit(1)
+
+    # Export to bin files for training
+    try:
+        train_ids = np.array(train_ids, dtype=np.uint16)
+        val_ids = np.array(val_ids, dtype=np.uint16)
+        
+        train_bin = os.path.join(script_dir, 'story-train.bin')
+        val_bin = os.path.join(script_dir, 'story-val.bin')
+        
+        train_ids.tofile(train_bin)
+        val_ids.tofile(val_bin)
+        
+        print(f"Binary files saved to:")
+        print(f"  - {train_bin}")
+        print(f"  - {val_bin}")
+        print("\nPreparation complete! You can now train your model.")
+    except Exception as e:
+        print(f"Error saving binary files: {str(e)}")
         sys.exit(1)
 
 if __name__ == "__main__":
